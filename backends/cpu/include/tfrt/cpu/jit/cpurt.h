@@ -38,6 +38,7 @@
 #include "tfrt/cpu/jit/async_runtime_api.h"
 #include "tfrt/host_context/kernel_utils.h"
 #include "tfrt/support/forward_decls.h"
+#include "tfrt/support/msan.h"
 
 namespace tfrt {
 
@@ -51,9 +52,13 @@ namespace jit {
 class CompilationResult;
 
 struct CompilationOptions {
+  // Byte alignment for allocated memrefs. Depending on the compiler flags
+  // Tensorflow requires tensors to be aligned on 16, 32 or 64 bytes.
+  int alignment = 0;
+
   // The number of worker threads (host context concurrent work queue size) that
   // can be used for parallelizing compute intensive parts of the kernel.
-  int num_worker_threads;
+  int num_worker_threads = 0;
 
   // LLVM optimization level when JIT compiling a kernel.
   Optional<llvm::CodeGenOpt::Level> jit_code_opt_level;
@@ -211,6 +216,7 @@ mlir::LogicalResult ReturnAsyncStridedMemref(RemainingResults results,
   if (!value_type) return mlir::failure();
 
   // Load the pointer to the async value from a pointer to result storage.
+  TFRT_MSAN_MEMORY_IS_INITIALIZED(result_ptr, sizeof(void*));
   void* ret = *reinterpret_cast<void**>(result_ptr);
   auto* value = static_cast<mlir::runtime::AsyncValue*>(ret);
 

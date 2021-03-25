@@ -30,9 +30,11 @@
 #include "llvm/ExecutionEngine/Orc/Mangling.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetSelect.h"
+#include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/AsyncToLLVM/AsyncToLLVM.h"
 #include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
 #include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVMPass.h"
+#include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Async/IR/Async.h"
 #include "mlir/Dialect/Async/Passes.h"
@@ -46,6 +48,7 @@
 #include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/StandardOps/Transforms/Passes.h"
+#include "mlir/Dialect/Vector/VectorOps.h"
 #include "mlir/ExecutionEngine/CRunnerUtils.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
@@ -282,7 +285,10 @@ struct ConvertDenseHostTensor {
   template <typename T, int rank>
   static DenseHostTensor Convert(void* memref_ptr) {
     auto* memref = static_cast<StridedMemRefType<T, rank>*>(memref_ptr);
+    TFRT_MSAN_MEMORY_IS_INITIALIZED(memref, sizeof(StridedMemRefType<T, rank>));
     TensorMetadata metadata(GetDType<T>(), Sizes(memref));
+    TFRT_MSAN_MEMORY_IS_INITIALIZED(memref->data,
+                                    metadata.GetHostSizeInBytes());
     return DenseHostTensor(
         metadata, HostBuffer::CreateFromExternal(
                       memref->data, metadata.GetHostSizeInBytes(),
@@ -296,6 +302,7 @@ mlir::LogicalResult ReturnAsyncToken(RemainingResults results,
   if (!type.isa<mlir::async::TokenType>()) return mlir::failure();
 
   // Load the pointer to the async token from a pointer to result storage.
+  TFRT_MSAN_MEMORY_IS_INITIALIZED(result_ptr, sizeof(void*));
   void* ret = *reinterpret_cast<void**>(result_ptr);
   auto* token = static_cast<mlir::runtime::AsyncToken*>(ret);
   results[result_index] = ConvertAsyncTokenToChain(token);
@@ -446,12 +453,19 @@ struct MathApproximationPass
     : public mlir::PassWrapper<MathApproximationPass, mlir::FunctionPass> {
   void runOnFunction() override;
 };
+
+// Add alignment attribute to all `alloc` operations.
+struct AlignedAllocationsPass
+    : public mlir::PassWrapper<AlignedAllocationsPass, mlir::FunctionPass> {
+  explicit AlignedAllocationsPass(int64_t alignment) : alignment(alignment) {}
+  void runOnFunction() override;
+  int64_t alignment;
+};
 }  // namespace
 
 void MathApproximationPass::runOnFunction() {
-  mlir::MLIRContext* ctx = &getContext();
-  mlir::OwningRewritePatternList patterns;
-  mlir::populateMathPolynomialApproximationPatterns(patterns, ctx);
+  mlir::OwningRewritePatternList patterns(&getContext());
+  mlir::populateMathPolynomialApproximationPatterns(patterns);
   if (failed(mlir::applyPatternsAndFoldGreedily(getOperation(),
                                                 std::move(patterns))))
     signalPassFailure();
@@ -459,6 +473,25 @@ void MathApproximationPass::runOnFunction() {
 
 std::unique_ptr<MathApproximationPass> CreateMathApproximationPass() {
   return std::make_unique<MathApproximationPass>();
+}
+
+void AlignedAllocationsPass::runOnFunction() {
+  assert(alignment >= 0 && "alignment must be larger or equal to 0");
+  if (alignment == 0) return;
+
+  auto i64 = mlir::IntegerType::get(&getContext(), 64);
+  auto alignment_attr = mlir::IntegerAttr::get(i64, alignment);
+
+  getFunction().walk([&](mlir::memref::AllocOp alloc) {
+    // Add alignment attribute only if the allocation has smaller alignment.
+    if (alloc.alignment().hasValue() && *alloc.alignment() < alignment)
+      alloc.alignmentAttr(alignment_attr);
+  });
+}
+
+std::unique_ptr<AlignedAllocationsPass> CreateAlignedAllocationsPass(
+    int64_t alignment) {
+  return std::make_unique<AlignedAllocationsPass>(alignment);
 }
 
 static void InitializeCompiler() {
@@ -520,13 +553,21 @@ static mlir::LogicalResult LowerToLlvm(mlir::ModuleOp module,
   fpm.addPass(mlir::createStdExpandOpsPass());
   fpm.addPass(CreateMathApproximationPass());
 
+  // Add alignment attribute to all memref allocations.
+  fpm.addPass(CreateAlignedAllocationsPass(opts.alignment));
+
   // Lower from high level async operations to async runtime.
   pm.addPass(mlir::createAsyncToAsyncRuntimePass());
 
   // Lower everything down to LLVM dialect.
-  mlir::LowerToLLVMOptions lower_to_llvm_opts;
   pm.addPass(mlir::createConvertAsyncToLLVMPass());
+  pm.addPass(mlir::createLowerAffinePass());
   pm.addPass(mlir::createLowerToCFGPass());
+
+  mlir::LowerVectorToLLVMOptions vector_to_llvm_opts;
+  pm.addPass(mlir::createConvertVectorToLLVMPass());
+
+  mlir::LowerToLLVMOptions lower_to_llvm_opts;
   pm.addPass(mlir::createLowerToLLVMPass(lower_to_llvm_opts));
 
   return pm.run(module);
@@ -563,9 +604,10 @@ Expected<CompilationResult> CompileKernelMlirModule(
 
   // Register MLIR dialects supported by the compiled kernels.
   mlir::DialectRegistry registry;
-  registry.insert<mlir::async::AsyncDialect, mlir::linalg::LinalgDialect,
-                  mlir::memref::MemRefDialect, mlir::scf::SCFDialect,
-                  mlir::StandardOpsDialect, mlir::math::MathDialect>();
+  registry.insert<mlir::AffineDialect, mlir::async::AsyncDialect,
+                  mlir::linalg::LinalgDialect, mlir::memref::MemRefDialect,
+                  mlir::scf::SCFDialect, mlir::StandardOpsDialect,
+                  mlir::math::MathDialect, mlir::vector::VectorDialect>();
   mlir::registerLLVMDialectTranslation(registry);
 
   // Register additional dialects provided via compilation options.
