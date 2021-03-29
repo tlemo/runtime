@@ -45,8 +45,11 @@ static constexpr auto ToCuda(BlasOperation operation) {
     case BlasOperation::kConjugate:
       return CUBLAS_OP_CONJG;
   }
+
+#ifdef __clang__
   llvm_unreachable(
       StrCat("Unrecognized BlasOperation value: ", operation).c_str());
+#endif
 }
 
 void internal::BlasHandleDeleter::operator()(BlasHandle handle) const {

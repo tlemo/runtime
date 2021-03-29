@@ -54,7 +54,9 @@ static constexpr auto ToCuda(DnnDataType data_type) {
     case DnnDataType::kInt8x32:
       return CUDNN_DATA_INT8x32;
   }
+#ifdef __clang__
   llvm_unreachable(StrCat("Unrecognized DnnDataType: ", data_type).c_str());
+#endif
 }
 
 static constexpr cudnnPoolingMode_t ToCuda(DnnPoolingMode mode) {
@@ -68,7 +70,9 @@ static constexpr cudnnPoolingMode_t ToCuda(DnnPoolingMode mode) {
     case DnnPoolingMode::kPoolingMaxDeterministic:
       return CUDNN_POOLING_MAX_DETERMINISTIC;
   }
+#ifdef __clang__
   llvm_unreachable(StrCat("Unrecognized DnnPoolingMode mode: ", mode).c_str());
+#endif
 }
 
 static constexpr auto ToCuda(DnnNanPropagation nan) {
@@ -78,7 +82,9 @@ static constexpr auto ToCuda(DnnNanPropagation nan) {
     case DnnNanPropagation::kPropagateNan:
       return CUDNN_PROPAGATE_NAN;
   }
+#ifdef __clang__
   llvm_unreachable(StrCat("Unrecognized DnnNanPropagation nan: ", nan).c_str());
+#endif
 }
 
 /*
