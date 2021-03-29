@@ -119,8 +119,8 @@ __host__ __device__ unsigned CUDARTAPI __cudaPushCallConfiguration(
 }
 
 char CUDARTAPI __cudaInitModule(void **fatCubinHandle) {
-  static auto func_ptr = GetFunctionPointer("__cudaInitModule",
-                                            __cudaInitModule);
+  static auto func_ptr =
+      GetFunctionPointer("__cudaInitModule", __cudaInitModule);
   if (!func_ptr) return 0;
   func_ptr(fatCubinHandle);
 }
