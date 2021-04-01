@@ -33,7 +33,7 @@ namespace gpu {
 namespace stream {
 
 // Convert DNN wrapper enums to cuDNN enums.
-static constexpr auto ToCuda(DnnDataType data_type) {
+static cudnnDataType_t ToCuda(DnnDataType data_type) {
   switch (data_type) {
     case DnnDataType::kFloat:
       return CUDNN_DATA_FLOAT;
@@ -59,7 +59,7 @@ static constexpr auto ToCuda(DnnDataType data_type) {
 #endif
 }
 
-static constexpr cudnnPoolingMode_t ToCuda(DnnPoolingMode mode) {
+static cudnnPoolingMode_t ToCuda(DnnPoolingMode mode) {
   switch (mode) {
     case DnnPoolingMode::kPoolingMax:
       return CUDNN_POOLING_MAX;
@@ -75,7 +75,7 @@ static constexpr cudnnPoolingMode_t ToCuda(DnnPoolingMode mode) {
 #endif
 }
 
-static constexpr auto ToCuda(DnnNanPropagation nan) {
+static cudnnNanPropagation_t ToCuda(DnnNanPropagation nan) {
   switch (nan) {
     case DnnNanPropagation::kNotPropagateNan:
       return CUDNN_NOT_PROPAGATE_NAN;
@@ -86,21 +86,6 @@ static constexpr auto ToCuda(DnnNanPropagation nan) {
   llvm_unreachable(StrCat("Unrecognized DnnNanPropagation nan: ", nan).c_str());
 #endif
 }
-
-/*
-static constexpr auto ToCuda(DnnTensorFormat format) {
-  return static_cast<cudnnTensorFormat_t>(format);
-}
-static constexpr auto ToCuda(DnnRnnInputMode mode) {
-  return static_cast<cudnnRNNInputMode_t>(mode);
-}
-static constexpr auto ToCuda(DnnDirectionMode mode) {
-  return static_cast<cudnnDirectionMode_t>(mode);
-}
-static constexpr auto ToCuda(DnnRnnMode mode) {
-  return static_cast<cudnnRNNMode_t>(mode);
-}
-*/
 
 static auto ToCuda(DnnTensorDescriptor desc) {
   return static_cast<cudnnTensorDescriptor_t>(desc);
@@ -116,10 +101,6 @@ static auto ToCuda(DnnFilterDescriptor desc) {
 
 static auto ToCuda(DnnActivationDescriptor desc) {
   return static_cast<cudnnActivationDescriptor_t>(desc);
-}
-
-static auto ToCuda(DnnOpTensorDescriptor dir) {
-  return static_cast<cudnnOpTensorDescriptor_t>(dir);
 }
 
 static constexpr auto ToCuda(DnnBatchNormMode mode) {
@@ -183,10 +164,6 @@ void internal::DnnDropoutDescriptorDeleter::operator()(
 void internal::DnnRnnDescriptorDeleter::operator()(
     DnnRnnDescriptor descriptor) const {
   LogIfError(DnnDestroyRnnDescriptor(descriptor));
-}
-void internal::DnnPersistentRnnPlanDeleter::operator()(
-    DnnPersistentRnnPlan plan) const {
-  LogIfError(DnnDestroyPersistentRnnPlan(plan));
 }
 
 llvm::Expected<DnnLibraryVersion> DnnGetVersion(Platform platform) {
@@ -394,26 +371,6 @@ llvm::Expected<OwningDnnActivationDescriptor> DnnCreateActivationDescriptor(
   }
 }
 
-llvm::Error DnnOpTensor(CurrentContext current, DnnHandle handle,
-                        DnnOpTensorDescriptor op_tensor_desc,
-                        Pointer<const void> alpha1, DnnTensorDescriptor a_desc,
-                        Pointer<const void> a, Pointer<const void> alpha2,
-                        DnnTensorDescriptor b_desc, Pointer<const void> b,
-                        Pointer<const void> beta, DnnTensorDescriptor c_desc,
-                        Pointer<void> c) {
-  auto platform = handle.platform();
-  switch (platform) {
-    case Platform::CUDA:
-      return CudnnOpTensor(current, handle, ToCuda(op_tensor_desc), alpha1,
-                           ToCuda(a_desc), a, alpha2, ToCuda(b_desc), b, beta,
-                           ToCuda(c_desc), c);
-    case Platform::ROCm:
-      return UnsupportedPlatform(platform);
-    default:
-      return InvalidPlatform(platform);
-  }
-}
-
 llvm::Error DnnSetTensor(CurrentContext current, DnnHandle handle,
                          DnnTensorDescriptor y_desc, Pointer<void> y,
                          Pointer<const void> value_ptr) {
@@ -519,18 +476,6 @@ llvm::Error DnnDestroyRnnDescriptor(DnnRnnDescriptor descriptor) {
   switch (platform) {
     case Platform::CUDA:
       return CudnnDestroyRnnDescriptor(descriptor);
-    case Platform::ROCm:
-      return UnsupportedPlatform(platform);
-    default:
-      return InvalidPlatform(platform);
-  }
-}
-
-llvm::Error DnnDestroyPersistentRnnPlan(DnnPersistentRnnPlan plan) {
-  auto platform = plan.platform();
-  switch (platform) {
-    case Platform::CUDA:
-      return CudnnDestroyPersistentRnnPlan(plan);
     case Platform::ROCm:
       return UnsupportedPlatform(platform);
     default:

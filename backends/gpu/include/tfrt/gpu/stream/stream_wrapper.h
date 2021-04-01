@@ -99,7 +99,6 @@
 #include "llvm/Support/Error.h"
 #include "tfrt/gpu/stream/cuda_forwards.h"
 #include "tfrt/gpu/stream/hip_forwards.h"
-#include "tfrt/support/ref_count.h"
 
 namespace tfrt {
 namespace gpu {
@@ -237,10 +236,6 @@ class Resource {
   bool operator==(Resource other) const { return pair_ == other.pair_; }
   bool operator!=(Resource other) const { return pair_ != other.pair_; }
 
-  size_t hash() const noexcept {
-    return std::hash<void*>()(pair_.getOpaqueValue());
-  }
-
  private:
   llvm::PointerIntPair<void*, 2, Platform> pair_;
 
@@ -248,6 +243,56 @@ class Resource {
                                        const Resource& resource) {
     return os << resource.pair_.getPointer() << " (" << resource.platform()
               << ")";
+  }
+  friend class std::hash<Resource>;
+};
+
+template <Platform platform>
+using PlatformType = std::integral_constant<Platform, platform>;
+
+using CudaPlatformType = PlatformType<Platform::CUDA>;
+using RocmPlatformType = PlatformType<Platform::ROCm>;
+
+template <typename T, typename Tag>
+using TagPlatformType = PlatformType<Platform::NONE>;
+
+// Enum union type.
+//
+// For a CUDA/ROCm pair of enums with different enumerators, instantiate
+// this template with an opaque tag type (e.g. `struct FooTag;`) and specialize
+// the TagPlatformType template alias in the CUDA/ROCm wrapper header, e.g.:
+// template <> using TagPlatformType<cudaFooEnum, FooTag> = CudaPlatformType;
+template <typename Tag>
+class Enum {
+  template <typename T, typename Tag_>
+  using IsCudaOrRocm =
+      std::enable_if<TagPlatformType<T, Tag_>::value != Platform::NONE>*;
+
+ public:
+  Enum() : value_(0), platform_(Platform::NONE) {}
+  template <typename T, typename Tag_ = Tag, IsCudaOrRocm<T, Tag_> = nullptr>
+  Enum(T value)
+      : value_(static_cast<int>(value)),
+        platform_(TagPlatformType<T, Tag_>::value) {}
+  template <typename T, typename Tag_ = Tag, IsCudaOrRocm<T, Tag_> = nullptr>
+  operator T() const {
+    using PlatformType = TagPlatformType<T, Tag_>;
+    assert(platform_ == PlatformType::value);
+    return static_cast<T>(value_);
+  }
+  Platform platform() const { return platform_; }
+  bool operator==(Enum other) const {
+    return value_ == other.value_ && platform_ == other.platform_;
+  }
+  bool operator!=(Enum other) const { return !(*this == other); }
+
+ private:
+  int value_;
+  Platform platform_;
+
+  friend llvm::raw_ostream& operator<<(llvm::raw_ostream& os,
+                                       const Enum& pair) {
+    return os << pair.value_ << " (" << pair.platform_ << ")";
   }
 };
 
@@ -516,20 +561,6 @@ struct MemoryDeleter : public Deleter {
 };
 template <typename T, typename Deleter>
 using OwningMemory = std::unique_ptr<T, MemoryDeleter<T, Deleter>>;
-
-template <typename Deleter>
-class RcResource : public ReferenceCounted<RcResource<Deleter>> {
- public:
-  explicit RcResource(OwningResource<Deleter> resource)
-      : resource_(std::move(resource)) {}
-
-  using Pointer = typename Deleter::pointer;
-  Pointer resource() const { return resource_.get(); }
-  Pointer resource() { return resource_.get(); }
-
- private:
-  OwningResource<Deleter> resource_;
-};
 }  // namespace internal
 
 // RAII wrappers for resources. Instances own the underlying resource.
@@ -542,10 +573,6 @@ using OwningContext = internal::OwningResource<internal::ContextDeleter>;
 using OwningModule = internal::OwningResource<internal::ModuleDeleter>;
 using OwningStream = internal::OwningResource<internal::StreamDeleter>;
 using OwningEvent = internal::OwningResource<internal::EventDeleter>;
-
-// RefCounted wrappers for resources that share ownership of the underlying
-// resources.
-using RcEvent = internal::RcResource<internal::EventDeleter>;
 
 // RAII wrappers for GPU memory. Instances own the underlying memory.
 template <typename T>

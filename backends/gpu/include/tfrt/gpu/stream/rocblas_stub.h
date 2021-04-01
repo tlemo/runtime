@@ -14,9 +14,37 @@
  * limitations under the License.
  */
 
-//===- stddef.h -------------------------------------------------*- C++ -*-===//
+//===- rocblas_stub.h -------------------------------------------*- C++ -*-===//
 //
-// Define standard types that are used by CUDA/HIP headers.
+// Mostly auto-generated rocBLAS API header.
 //
 //===----------------------------------------------------------------------===//
-typedef __SIZE_TYPE__ size_t;
+#ifndef TFRT_GPU_STREAM_ROCBLAS_STUB_H_
+#define TFRT_GPU_STREAM_ROCBLAS_STUB_H_
+
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+
+#include "tfrt/gpu/stream/hip_forwards.h"
+
+// Declare types from rocblas.h used in rocblas_stub.h.inc.
+using rocblas_int = int;
+
+struct rocblas_half {
+  uint16_t data;
+};
+
+struct rocblas_float_complex {
+  float x, y;
+};
+
+struct rocblas_double_complex {
+  double x, y;
+};
+
+extern "C" {
+#include "rocblas_stub.h.inc"
+}
+
+#endif  // TFRT_GPU_STREAM_ROCBLAS_STUB_H_

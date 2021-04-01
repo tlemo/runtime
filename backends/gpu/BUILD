@@ -32,19 +32,34 @@ package_group(
     ],
 )
 
-# Generated API headers and implementations for HIP libraries.
-# Note: Only gpu_stream_wrapper should depend on hip_stubs.
 tfrt_cc_library(
-    name = "hip_stubs",
-    srcs = ["lib/stream/hip_stub.cc"],
+    name = "symbol_loader",
+    hdrs = ["lib/stream/symbol_loader.h"],
+    deps = [
+        "@llvm-project//llvm:Support",
+        "@tf_runtime//:support",
+    ],
+)
+
+# Generated API headers and implementations for HIP libraries.
+# Note: Only gpu_stream_wrapper should depend on rocm_stubs.
+tfrt_cc_library(
+    name = "rocm_stubs",
+    srcs = [
+        "lib/stream/hip_stub.cc",
+        "lib/stream/miopen_stub.cc",
+        "lib/stream/rocblas_stub.cc",
+    ],
     hdrs = [
         "include/tfrt/gpu/stream/hip_forwards.h",
         "include/tfrt/gpu/stream/hip_stub.h",
+        "include/tfrt/gpu/stream/miopen_stub.h",
+        "include/tfrt/gpu/stream/rocblas_stub.h",
     ],
     visibility = ["//visibility:private"],
     deps = [
         # No HIP shared object dependencies, they are dynamically loaded.
-        "@tf_runtime//:support",
+        ":symbol_loader",
         "@tf_runtime//third_party/hip:stub_inc",
     ],
 )
@@ -61,11 +76,11 @@ tfrt_cc_library(
         "lib/stream/cudnn_stub.cc",
         "lib/stream/cufft_stub.cc",
         "lib/stream/cusolver_stub.cc",
-        "lib/stream/symbol_loader.h",
     ],
     visibility = ["//visibility:private"],
     deps = [
         # No CUDA shared object dependencies, they are dynamically loaded.
+        ":symbol_loader",
         # copybara:uncomment_begin
         # "@cuda_headers",
         # "@cudnn_headers//:cudnn_header",
@@ -74,9 +89,7 @@ tfrt_cc_library(
         "@local_cuda//:cuda_headers",
         "@cudnn_headers",
         # copybara:comment_end
-        "@tf_runtime//:support",
         "@tf_runtime//third_party/cuda:stub_inc",
-        "@llvm-project//llvm:Support",
     ],
 )
 
@@ -106,6 +119,7 @@ tfrt_cc_library(
         "lib/stream/dnn_wrapper.cc",
         "lib/stream/hash_utils.cc",
         "lib/stream/hip_wrapper.cc",
+        "lib/stream/rocblas_wrapper.cc",
         "lib/stream/solver_wrapper.cc",
         "lib/stream/stream_wrapper.cc",
         "lib/stream/wrapper_detail.h",
@@ -121,6 +135,7 @@ tfrt_cc_library(
         "include/tfrt/gpu/stream/dnn_wrapper.h",
         "include/tfrt/gpu/stream/hash_utils.h",
         "include/tfrt/gpu/stream/hip_wrapper.h",
+        "include/tfrt/gpu/stream/rocblas_wrapper.h",
         "include/tfrt/gpu/stream/solver_wrapper.h",
         "include/tfrt/gpu/stream/stream_wrapper.h",
     ],
@@ -128,7 +143,7 @@ tfrt_cc_library(
         ":tests_and_tools",
     ],
     deps = [
-        ":hip_stubs",
+        ":rocm_stubs",
         "@llvm-project//llvm:Support",
         "@tf_runtime//:support",
     ] + select({
@@ -789,6 +804,7 @@ tfrt_cc_library(
     alwayslink_static_registration_src = "lib/kernels/cuda/static_registration.cc",
     visibility = [":tests_and_tools"],
     deps = [
+        ":gpu_event_manager",
         ":gpu_memory",
         ":gpu_stream_wrapper",
         ":gpu_tensor",
