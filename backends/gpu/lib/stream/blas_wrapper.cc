@@ -56,7 +56,6 @@ static rocblas_operation ToRocm(BlasOperation operation) {
     case BlasOperation::kConjugateTranspose:
       return rocblas_operation_conjugate_transpose;
   }
-
   llvm_unreachable(
       StrCat("Unrecognized BlasOperation value: ", operation).c_str());
 }
