@@ -57,10 +57,8 @@ static rocblas_operation ToRocm(BlasOperation operation) {
       return rocblas_operation_conjugate_transpose;
   }
 
-#ifdef __clang__
   llvm_unreachable(
       StrCat("Unrecognized BlasOperation value: ", operation).c_str());
-#endif
 }
 
 void internal::BlasHandleDeleter::operator()(BlasHandle handle) const {
