@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#build --config=clang  # By default, build with clang.
-build --config=gcc
+build --config=clang  # By default, build with clang.
 
 # Build with clang.
 build:clang --repo_env=CC=clang
