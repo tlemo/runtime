@@ -14,11 +14,7 @@
  * limitations under the License.
  */
 
-//===- dense_host_tensor_view.h ---------------------------------*- C++ -*-===//
-//
 // This file defines the DHTIndexableView class template.
-//
-//===----------------------------------------------------------------------===//
 
 #ifndef TFRT_TENSOR_DENSE_HOST_TENSOR_VIEW_H_
 #define TFRT_TENSOR_DENSE_HOST_TENSOR_VIEW_H_
@@ -50,6 +46,9 @@ class DHTArrayView {
  public:
   // Used by Argument<> to get the underlying type.
   using UnderlyingT = DenseHostTensor;
+
+  // Used by ::testing::ElementsAre to get the underlying type.
+  using value_type = DType;
 
   /*implicit*/ DHTArrayView(const DenseHostTensor* dht) : dht_(*dht) {
     assert(GetDType<DType>() == dht->dtype() && "Incorrect dtype for tensor");

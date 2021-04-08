@@ -14,11 +14,7 @@
  * limitations under the License.
  */
 
-//===- rocblas_wrapper.h ----------------------------------------*- C++ -*-===//
-//
 // Thin wrapper around the rocBLAS API adding llvm::Error.
-//
-//===----------------------------------------------------------------------===//
 #ifndef TFRT_GPU_STREAM_ROCBLAS_WRAPPER_H_
 #define TFRT_GPU_STREAM_ROCBLAS_WRAPPER_H_
 
@@ -40,6 +36,9 @@ llvm::raw_ostream& operator<<(llvm::raw_ostream& os,
 // Wraps a rocblas_status into an llvm::ErrorInfo.
 using RocblasErrorInfo = TupleErrorInfo<RocblasErrorData>;
 rocblas_status GetResult(const RocblasErrorInfo& info);
+
+// Convert BLAS wrapper enums to rocBLAS enums.
+rocblas_operation ToRocblas(BlasOperation operation);
 
 llvm::Expected<OwningBlasHandle> RocblasCreate(CurrentContext current);
 llvm::Error RocblasDestroy(rocblas_handle handle);

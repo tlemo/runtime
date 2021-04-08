@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//===- cublas_wrapper.cc ----------------------------------------*- C++ -*-===//
-//
 // Thin wrapper around the cuBLAS API adding llvm::Error.
-//
-//===----------------------------------------------------------------------===//
 #include "tfrt/gpu/stream/cublas_wrapper.h"
 
 #include "llvm/Support/Errc.h"
@@ -85,6 +81,19 @@ cublasStatus_t GetResult(const CublasErrorInfo& info) {
 template <typename T>
 static T* ToCuda(Pointer<T> ptr) {
   return ptr.raw(Platform::CUDA);
+}
+
+cublasOperation_t ToCublas(BlasOperation operation) {
+  switch (operation) {
+    case BlasOperation::kNone:
+      return CUBLAS_OP_N;
+    case BlasOperation::kTranspose:
+      return CUBLAS_OP_T;
+    case BlasOperation::kConjugateTranspose:
+      return CUBLAS_OP_C;
+  }
+  llvm_unreachable(
+      StrCat("Unrecognized BlasOperation value: ", operation).c_str());
 }
 
 llvm::Expected<OwningBlasHandle> CublasCreate(CurrentContext current) {

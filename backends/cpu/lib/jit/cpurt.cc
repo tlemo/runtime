@@ -18,8 +18,6 @@
 //
 // Support library for implementing TFRT kernels that do JIT compilation using
 // MLIR framework.
-//
-//===----------------------------------------------------------------------===//
 
 #include "tfrt/cpu/jit/cpurt.h"
 
@@ -58,6 +56,10 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
+#include "mlir/Target/LLVMIR/Dialect/AMX/AMXToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/AVX512/AVX512ToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/ArmNeon/ArmNeonToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/LLVMArmSVE/LLVMArmSVEToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -608,6 +610,11 @@ Expected<CompilationResult> CompileKernelMlirModule(
                   mlir::linalg::LinalgDialect, mlir::memref::MemRefDialect,
                   mlir::scf::SCFDialect, mlir::StandardOpsDialect,
                   mlir::math::MathDialect, mlir::vector::VectorDialect>();
+  // Register MLIR dialects that can be translated to LLVM IR.
+  mlir::registerArmNeonDialectTranslation(registry);
+  mlir::registerAMXDialectTranslation(registry);
+  mlir::registerAVX512DialectTranslation(registry);
+  mlir::registerLLVMArmSVEDialectTranslation(registry);
   mlir::registerLLVMDialectTranslation(registry);
 
   // Register additional dialects provided via compilation options.
@@ -620,8 +627,8 @@ Expected<CompilationResult> CompileKernelMlirModule(
   llvm::raw_string_ostream os(diagnostic_str);
   mlir::SourceMgrDiagnosticHandler handler(source_mgr, context.get(), os);
 
-  auto error = [&](string_view message) -> llvm::Error {
-    return MakeStringError(message, ":\n", diagnostic_str);
+  auto error = [&](auto original_error) -> llvm::Error {
+    return MakeStringError(original_error, ":\n", diagnostic_str);
   };
 
   // Parse a kernel source code into the MLIR Module.
@@ -666,7 +673,7 @@ Expected<CompilationResult> CompileKernelMlirModule(
   auto engine =
       mlir::ExecutionEngine::create(*module, /*llvmModuleBuilder=*/nullptr,
                                     transformer, opts.jit_code_opt_level, libs);
-  if (!engine) return engine.takeError();
+  if (!engine) return error(engine.takeError());
 
   // Register Async Runtime API intrinsics.
   (*engine)->registerSymbols(AsyncRuntimeApiSymbolMap);

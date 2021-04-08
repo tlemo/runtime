@@ -14,11 +14,7 @@
  * limitations under the License.
  */
 
-//===- dtype.h --------------------------------------------------*- C++ -*-===//
-//
 // This file defines the DType enum and helpers for working with it.
-//
-//===----------------------------------------------------------------------===//
 
 #ifndef TFRT_DTYPE_DTYPE_H_
 #define TFRT_DTYPE_DTYPE_H_
@@ -108,6 +104,8 @@ template <DType::Kind K>
 struct TypeForDTypeKindInternal {};
 template <DType::Kind K>
 using TypeForDTypeKind = typename TypeForDTypeKindInternal<K>::Type;
+
+size_t GetDTypeByteSize(DType::Kind dtype);
 
 // TFRT_REGISTER_DTYPE is a macro to register a non-trivial C++ type to a DType.
 #define TFRT_REGISTER_DTYPE(CPP_TYPE, ENUM)     \

@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//===- rocblas_wrapper.cc ---------------------------------------*- C++ -*-===//
-//
 // Thin wrapper around the rocBLAS API adding llvm::Error.
-//
-//===----------------------------------------------------------------------===//
 #include "tfrt/gpu/stream/rocblas_wrapper.h"
 
 #include "llvm/Support/Errc.h"
@@ -91,6 +87,19 @@ rocblas_status GetResult(const RocblasErrorInfo& info) {
 template <typename T>
 static T* ToRocm(Pointer<T> ptr) {
   return ptr.raw(Platform::ROCm);
+}
+
+rocblas_operation ToRocblas(BlasOperation operation) {
+  switch (operation) {
+    case BlasOperation::kNone:
+      return rocblas_operation_none;
+    case BlasOperation::kTranspose:
+      return rocblas_operation_transpose;
+    case BlasOperation::kConjugateTranspose:
+      return rocblas_operation_conjugate_transpose;
+  }
+  llvm_unreachable(
+      StrCat("Unrecognized BlasOperation value: ", operation).c_str());
 }
 
 llvm::Expected<OwningBlasHandle> RocblasCreate(CurrentContext current) {

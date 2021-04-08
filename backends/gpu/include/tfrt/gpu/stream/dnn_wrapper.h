@@ -14,11 +14,7 @@
  * limitations under the License.
  */
 
-//===- dnn_wrapper.h --------------------------------------------*- C++ -*-===//
-//
 // Thin abstraction layer for cuDNN and MIOpen.
-//
-//===----------------------------------------------------------------------===//
 #ifndef TFRT_GPU_STREAM_DNN_WRAPPER_H_
 #define TFRT_GPU_STREAM_DNN_WRAPPER_H_
 
@@ -34,23 +30,9 @@ namespace stream {
 
 constexpr int kDnnDimMax() { return 8; }
 
-enum class DnnErrQueryMode {
-  kRawcode,
-  kNonblocking,
-  kBlocking,
-};
-
-enum class DnnDataType {
-  kFloat,
-  kDouble,
-  kHalf,
-  kInt8,
-  kInt32,
-  kInt8x4,
-  kUint8,
-  kUint8x4,
-  kInt8x32,
-};
+struct DnnDataTypeTag;
+// Data type enum (platform-discriminated).
+using DnnDataType = Enum<DnnDataTypeTag>;
 
 enum class DnnTensorFormat {
   kNchw,
@@ -208,11 +190,19 @@ enum class DnnRNNClipMode {
   kRnnClipMinmax,  // enables LSTM cell clipping
 };
 
-struct DnnOpTensorDescriptorData {
-  DnnOpTensorOp op;
-  DnnDataType math_type;
-  DnnNanPropagation nan_propagation;
+// Convolution algorithm ids (platform-discriminated).
+struct DnnConvFwdAlgoTag {
+  using type = uint64_t;
 };
+struct DnnConvBwdDataAlgoTag {
+  using type = uint64_t;
+};
+struct DnnConvBwdWeightsAlgoTag {
+  using type = uint64_t;
+};
+using DnnConvFwdAlgo = Enum<DnnConvFwdAlgoTag>;
+using DnnConvBwdDataAlgo = Enum<DnnConvBwdDataAlgoTag>;
+using DnnConvBwdWeightsAlgo = Enum<DnnConvBwdWeightsAlgoTag>;
 
 struct DnnConvolutionDescriptorData {
   llvm::SmallVector<int, kDnnDimMax()> paddings;
@@ -240,13 +230,6 @@ struct DnnActivationDescriptorData {
   DnnActivationMode mode;
   DnnNanPropagation nan_propagation;
   double coefficient;
-};
-
-struct DnnRnnClipData {
-  DnnRNNClipMode mode;
-  DnnNanPropagation nan_propagation;
-  double left_clip;
-  double right_clip;
 };
 
 // Non-owning handles of GPU resources.
@@ -420,10 +403,30 @@ llvm::Expected<llvm::SmallVector<int, kDnnDimMax()>>
 DnnGetConvolutionForwardOutputDim(DnnConvolutionDescriptor conv_desc,
                                   DnnTensorDescriptor input_tensor_desc,
                                   DnnFilterDescriptor filter_desc);
-llvm::Error DnnConvolutionBackwardBias(
-    CurrentContext current, DnnHandle handle, Pointer<const void> alpha,
-    DnnTensorDescriptor dy_desc, Pointer<const void> dy,
-    Pointer<const void> beta, DnnTensorDescriptor db_desc, Pointer<void> db);
+llvm::Error DnnConvolutionForward(
+    CurrentContext current, DnnHandle handle, DnnTensorDescriptor x_desc,
+    Pointer<const void> x, DnnFilterDescriptor w_desc, Pointer<const void> w,
+    DnnConvolutionDescriptor conv_desc, DnnConvFwdAlgo algo,
+    Pointer<void> work_space, size_t work_space_size_in_bytes,
+    DnnTensorDescriptor y_desc, Pointer<void> y);
+llvm::Error DnnConvolutionBackwardData(
+    CurrentContext current, DnnHandle handle, DnnFilterDescriptor w_desc,
+    Pointer<const void> w, DnnTensorDescriptor dy_desc, Pointer<const void> dy,
+    DnnConvolutionDescriptor conv_desc, DnnConvBwdDataAlgo algo,
+    Pointer<void> work_space, size_t work_space_size_in_bytes,
+    DnnTensorDescriptor dx_desc, Pointer<void> dx);
+llvm::Error DnnConvolutionBackwardFilter(
+    CurrentContext current, DnnHandle handle, DnnTensorDescriptor x_desc,
+    Pointer<const void> x, DnnTensorDescriptor dy_desc, Pointer<const void> dy,
+    DnnConvolutionDescriptor conv_desc, DnnConvBwdWeightsAlgo algo,
+    Pointer<void> work_space, size_t work_space_size_in_bytes,
+    DnnFilterDescriptor dw_desc, Pointer<void> dw);
+llvm::Error DnnConvolutionBackwardBias(CurrentContext current, DnnHandle handle,
+                                       Pointer<const void> alpha,
+                                       DnnTensorDescriptor dy_desc,
+                                       Pointer<const void> dy,
+                                       DnnTensorDescriptor db_desc,
+                                       Pointer<void> db);
 llvm::Expected<llvm::SmallVector<int, kDnnDimMax()>>
 DnnGetPoolingForwardOutputDim(const DnnPoolingDescriptor pooling_desc,
                               const DnnTensorDescriptor input_tensor_desc);

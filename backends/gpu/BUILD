@@ -21,6 +21,7 @@ package_group(
         # copybara:uncomment_begin
         # "@tf_runtime//backends/gpu/...",
         # # Authorized users go here.
+        # "//platforms/xla/tests/gpu/...",
         # "@tf_runtime//tools/...",
         # "@tf_runtime//cpp_tests/...",
         # copybara:uncomment_end_and_comment_begin
@@ -119,6 +120,7 @@ tfrt_cc_library(
         "lib/stream/dnn_wrapper.cc",
         "lib/stream/hash_utils.cc",
         "lib/stream/hip_wrapper.cc",
+        "lib/stream/miopen_wrapper.cc",
         "lib/stream/rocblas_wrapper.cc",
         "lib/stream/solver_wrapper.cc",
         "lib/stream/stream_wrapper.cc",
@@ -135,6 +137,7 @@ tfrt_cc_library(
         "include/tfrt/gpu/stream/dnn_wrapper.h",
         "include/tfrt/gpu/stream/hash_utils.h",
         "include/tfrt/gpu/stream/hip_wrapper.h",
+        "include/tfrt/gpu/stream/miopen_wrapper.h",
         "include/tfrt/gpu/stream/rocblas_wrapper.h",
         "include/tfrt/gpu/stream/solver_wrapper.h",
         "include/tfrt/gpu/stream/stream_wrapper.h",
@@ -179,6 +182,7 @@ tfrt_cc_library(
         "include/tfrt/gpu/memory/gpu_buffer.h",
         "include/tfrt/gpu/memory/sub_allocator.h",
     ],
+    visibility = [":tests_and_tools"],
     deps = [
         ":gpu_stream_wrapper",
         "@llvm-project//llvm:Support",
@@ -566,7 +570,6 @@ cuda_library(
         "lib/ops/tf/dnn_ops.cu.cc",
     ],
     hdrs = ["lib/ops/tf/dnn_ops_cu.h"],
-    features = ["-parse_headers"],  # See b/152520254
     deps = [
         ":gpu_memory",
         ":gpu_stream_wrapper",

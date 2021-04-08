@@ -29,9 +29,13 @@ include "tfrt/tfrt_op_base.td"
 include "tfrt/tensor/opdefs/tensor_shape_base.td"
 include "tfrt/gpu/kernels/cuda_opdefs/cuda_ops_base.td"
 
+def DnnActivationDescriptorType : OpaqueType<"tfrt_cuda", "dnn_activation_descriptor", "!trft_cuda.dnn_activation_descriptor type">;
+def DnnConvolutionDescriptorType : OpaqueType<"tfrt_cuda", "dnn_convolution_descriptor", "!trft_cuda.dnn_convolution_descriptor type">;
+def DnnFilterDescriptorType : OpaqueType<"tfrt_cuda", "dnn_filter_descriptor", "!trft_cuda.dnn_filter_descriptor type">;
 def DnnHandleType : OpaqueType<"tfrt_cuda", "dnn_handle", "!trft_cuda.dnn_handle type">;
 def DnnPoolingDescriptorType : OpaqueType<"tfrt_cuda", "dnn_pooling_descriptor", "!trft_cuda.dnn_pooling_descriptor type">;
 def DnnTensorDescriptorType : OpaqueType<"tfrt_cuda", "dnn_tensor_descriptor", "!trft_cuda.dnn_tensor_descriptor type">;
+
 
 def DnnCreateOp : CUDA_Op<"dnn.create"> {
   let summary = "tfrt_cuda dnn.create operation";
@@ -47,9 +51,9 @@ def DnnCreateOp : CUDA_Op<"dnn.create"> {
     %ch1 = tfrt.new.chain
     %ch2 = tfrt_cuda.init %ch1
     %index = tfrt.constant.i32 0
-    %device, %ch3 = tfrt_cuda.device.get %index, %ch2
-    %context, %ch4 = tfrt_cuda_test.context.get %device, %ch3
-    %cudnn, %ch5 = tfrt_cuda.dnn.create %context, %ch4
+    %device = tfrt_cuda.device.get %index, %ch1
+    %context, %ch4 = tfrt_cuda_test.context.get %device, %ch1
+    %cudnn, %ch5 = tfrt_cuda.dnn.create %context, %ch1
 
   }];
   let arguments = (ins
@@ -132,7 +136,7 @@ def DnnCreatePoolingDescriptorOp : CUDA_Op<"dnn.create_pooling_descriptor"> {
   let summary = "tfrt_cuda dnn.create_pooling_descriptor operation";
   let description = [{
     tfrt_cuda.dnn.create_pooling_descriptor creates a pooling descriptor object
-    by allocating the memory needed to hold its opaque structure then it 
+    by allocating the memory needed to hold its opaque structure then it
     initializes created pooling descriptor object.
 
     mode is an UI32 value with the following meaning:
@@ -319,5 +323,118 @@ def DnnPoolingBackwardOp : CUDA_Op<"dnn.pooling_backward"> {
                   );
   let results = (outs TFRT_ChainType);
 }
+
+// TODO(b/184675727): Remove this Op once the tfrt_cuda dialect moves from
+// async to sync Ops.
+def DnnConvolutionForwardOp : CUDA_Op<"dnn.convolution_forward"> {
+  let summary = "tfrt_cuda dnn.convolution_forward operation";
+  let description = [{
+    tfrt_cuda.dnn.convolution_forward executes convolutions or
+                                      cross-correlations over x using filters
+                                      specified with w, returning results in y.
+                                      Scaling factors alpha and beta can be
+                                      used to scale the input tensor and the
+                                      output tensor respectively.
+  }];
+  let arguments = (ins ContextType:$context,
+                   DnnHandleType:$handle,
+                   DnnTensorDescriptorType:$x_desc,
+                   BufferType:$x,
+                   DnnFilterDescriptorType:$w_desc,
+                   BufferType:$w,
+                   DnnConvolutionDescriptorType:$conv_desc,
+                   UI64:$algo,
+                   BufferType:$work_space,
+                   DnnTensorDescriptorType:$y_desc,
+                   BufferType:$y);
+}
+
+// TODO(b/184675727): Remove this Op once the tfrt_cuda dialect moves from
+// async to sync Ops.
+def DnnConvolutionBackwardDataOp : CUDA_Op<"dnn.convolution_backward_data"> {
+  let summary = "tfrt_cuda dnn.convolution_backward_data operation";
+  let description = [{
+    tfrt_cuda.dnn.convolution_backward_data computes the convolution data
+                                            gradient of the tensor dy, where y
+                                            is the output of the forward
+                                            convolution in
+                                            tfrt_cuda.dnn.convolution_forward.
+                                            It uses the specified algo, and
+                                            returns the results in the output
+                                            tensor dx.
+}];
+  let arguments = (ins ContextType:$context,
+                   DnnHandleType:$handle,
+                   DnnFilterDescriptorType:$w_desc,
+                   BufferType:$w,
+                   DnnTensorDescriptorType:$dy_desc,
+                   BufferType:$dy,
+                   DnnConvolutionDescriptorType:$conv_desc,
+                   UI64:$algo,
+                   BufferType:$work_space,
+                   DnnTensorDescriptorType:$dx_desc,
+                   BufferType:$dx);
+}
+
+// TODO(b/184675727): Remove this Op once the tfrt_cuda dialect moves from
+// async to sync Ops.
+def DnnConvolutionBackwardFilterOp : CUDA_Op<"dnn.convolution_backward_filter"> {
+  let summary = "tfrt_cuda dnn.convolution_backward_filter operation";
+  let description = [{
+    tfrt_cuda.dnn.convolution_backward_filter computes the convolution weight
+                                              (filter) gradient of the tensor
+                                              dy, where y is the output of the
+                                              forward convolution in
+                                              tfrt_cuda.dnn.convolution_forward.
+                                              It uses the specified algo, and
+                                              returns the results in the output
+                                              tensor dw.
+}];
+  let arguments = (ins ContextType:$context,
+                   DnnHandleType:$handle,
+                   DnnTensorDescriptorType:$x_desc,
+                   BufferType:$x,
+                   DnnTensorDescriptorType:$dy_desc,
+                   BufferType:$dy,
+                   DnnConvolutionDescriptorType:$conv_desc,
+                   UI64:$algo,
+                   BufferType:$work_space,
+                   DnnFilterDescriptorType:$dw_desc,
+                   BufferType:$dw);
+}
+
+// TODO(b/184675727): Remove this Op once the tfrt_cuda dialect moves from
+// async to sync Ops.
+def CudnnConvolutionBiasActivationForwardOp :
+             CUDA_Op<"dnn.convolution_bias_activation_forward"> {
+  let summary =
+    "tfrt_cuda dnn.convolution_bias_activation_forward operation";
+  let description = [{
+    tfrt_cuda.dnn.convolution_bias_activation_forward applies a bias and then
+                        an activation to the convolutions or cross-correlations
+                        of tfrt_cuda.dnn.convolution_forward, returning results
+                        in y. The full computation follows the equation
+                        y = act ( alpha1 * conv(x) + alpha2 * z + bias ).
+  }];
+  let arguments = (ins ContextType:$context,
+                   DnnHandleType:$handle,
+                   BufferType:$alpha1,
+                   DnnTensorDescriptorType:$x_desc,
+                   BufferType:$x,
+                   DnnFilterDescriptorType:$w_desc,
+                   BufferType:$w,
+                   DnnConvolutionDescriptorType:$conv_desc,
+                   UI64:$algo,
+                   BufferType:$work_space,
+                   BufferType:$alpha2,
+                   DnnTensorDescriptorType:$z_desc,
+                   BufferType:$z,
+                   DnnTensorDescriptorType:$bias_desc,
+                   BufferType:$bias,
+                   DnnActivationDescriptorType:$activation_desc,
+                   DnnTensorDescriptorType:$y_desc,
+                   BufferType:$y);
+}
+
 
 #endif  // CUDA_DNN_OPS

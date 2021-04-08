@@ -14,11 +14,7 @@
  * limitations under the License.
  */
 
-//===- cublas_wrapper.h -----------------------------------------*- C++ -*-===//
-//
 // Thin wrapper around the cuBLAS API adding llvm::Error.
-//
-//===----------------------------------------------------------------------===//
 #ifndef TFRT_GPU_STREAM_CUBLAS_WRAPPER_H_
 #define TFRT_GPU_STREAM_CUBLAS_WRAPPER_H_
 
@@ -40,6 +36,9 @@ llvm::raw_ostream& operator<<(llvm::raw_ostream& os,
 // Wraps a cublasStatus_t into an llvm::ErrorInfo.
 using CublasErrorInfo = TupleErrorInfo<CublasErrorData>;
 cublasStatus_t GetResult(const CublasErrorInfo& info);
+
+// Convert BLAS wrapper enums to cuBLAS enums.
+cublasOperation_t ToCublas(BlasOperation operation);
 
 llvm::Expected<OwningBlasHandle> CublasCreate(CurrentContext current);
 llvm::Error CublasDestroy(cublasHandle_t handle);

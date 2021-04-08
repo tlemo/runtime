@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//===- tracing_benchmark.cc -------------------------------------*- C++ -*-===//
-//
 // Benchmark measuring tracing overhead.
-//
-//===----------------------------------------------------------------------===//
 
 #include "tfrt/tracing/tracing.h"
 
@@ -91,19 +87,23 @@ TEST(TracingTest, Events) {
 
   EXPECT_CALL(sink, RecordTracingEvent(FunctionReturns("event2")))
       .Times(0);  // Should not call after tracing is disabled.
-  RecordTracingEvent(TracingLevel::Debug, [] { return "event2"; });
+  RecordTracingEvent(TracingLevel::Verbose, [] { return "event2"; });
 
-  SetTracingLevel(TracingLevel::Debug);
+  SetTracingLevel(TracingLevel::Verbose);
+  EXPECT_TRUE(IsAboveTracingLevel(TracingLevel::Default));
+  EXPECT_TRUE(IsAboveTracingLevel(TracingLevel::Verbose));
+  EXPECT_FALSE(IsAboveTracingLevel(TracingLevel::Debug));
+  EXPECT_EQ(GetCurrentTracingLevel(), TracingLevel::Verbose);
 
   EXPECT_CALL(sink, RecordTracingEvent(FunctionReturns("event3")));
-  RecordTracingEvent(TracingLevel::Debug, [] { return "event3"; });
+  RecordTracingEvent(TracingLevel::Verbose, [] { return "event3"; });
 
   EXPECT_CALL(sink, RequestTracing(false));
   RequestTracing(false);
 
   EXPECT_CALL(sink, RecordTracingEvent(FunctionReturns("event4")))
       .Times(0);  // Should not call after tracing is disabled.
-  RecordTracingEvent(TracingLevel::Debug, [] { return "event4"; });
+  RecordTracingEvent(TracingLevel::Verbose, [] { return "event4"; });
 }
 
 TEST(TracingTest, Scopes) {
@@ -130,14 +130,18 @@ TEST(TracingTest, Scopes) {
 
   EXPECT_CALL(sink, PushTracingScope(FunctionReturns("scope2"))).Times(0);
   // NOLINTNEXTLINE(bugprone-unused-raii)
-  TracingScope(TracingLevel::Debug, [] { return "scope2"; });
+  TracingScope(TracingLevel::Verbose, [] { return "scope2"; });
 
-  SetTracingLevel(TracingLevel::Debug);
+  SetTracingLevel(TracingLevel::Verbose);
+  EXPECT_TRUE(IsAboveTracingLevel(TracingLevel::Default));
+  EXPECT_TRUE(IsAboveTracingLevel(TracingLevel::Verbose));
+  EXPECT_FALSE(IsAboveTracingLevel(TracingLevel::Debug));
+  EXPECT_EQ(GetCurrentTracingLevel(), TracingLevel::Verbose);
 
   EXPECT_CALL(sink, PushTracingScope(FunctionReturns("scope3")));
   EXPECT_CALL(sink, PopTracingScope());
   // NOLINTNEXTLINE(bugprone-unused-raii)
-  TracingScope(TracingLevel::Debug, [] { return "scope3"; });
+  TracingScope(TracingLevel::Verbose, [] { return "scope3"; });
 
   EXPECT_CALL(sink, RequestTracing(false));
   RequestTracing(false);
