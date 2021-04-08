@@ -125,13 +125,6 @@ __host__ __device__ unsigned CUDARTAPI __cudaPushCallConfiguration(
   return func_ptr(gridDim, blockDim, sharedMem, stream);
 }
 
-char CUDARTAPI __cudaInitModule(void **fatCubinHandle) {
-  static auto func_ptr =
-      GetFunctionPointer("__cudaInitModule", __cudaInitModule);
-  if (!func_ptr) return 0;
-  func_ptr(fatCubinHandle);
-}
-
 void CUDARTAPI __cudaRegisterFatBinaryEnd(void **fatCubinHandle) {
   static auto func_ptr = GetFunctionPointer("__cudaRegisterFatBinaryEnd",
                                             __cudaRegisterFatBinaryEnd);
