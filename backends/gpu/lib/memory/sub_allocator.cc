@@ -22,27 +22,25 @@
 #include <cstdint>
 
 #include "tfrt/gpu/memory/gpu_allocator.h"
-#include "tfrt/gpu/stream/cuda_wrapper.h"
-#include "tfrt/gpu/stream/stream_wrapper.h"
+#include "tfrt/gpu/wrapper/cuda_wrapper.h"
 #include "tfrt/support/ref_count.h"
 
 namespace tfrt {
 namespace gpu {
 
-llvm::Expected<gpu::stream::Pointer<void>> SubAllocator::Allocate(
-    size_t size, gpu::stream::Stream stream) {
-  size_t mask = GpuAllocator::kAlignment - 1;
-  if (GpuAllocator::kAlignment & mask) {
+llvm::Expected<wrapper::Pointer<void>> SubAllocator::Allocate(
+    size_t size, wrapper::Stream stream) {
+  size_t mask = GpuCrtAllocator::kAlignment - 1;
+  if (GpuCrtAllocator::kAlignment & mask) {
     return llvm::createStringError(llvm::errc::invalid_argument,
                                    "Alignment must be power of two.");
   }
   uintptr_t address = (next_addr_ + mask) & ~mask;
   next_addr_ = address + size;
-  return gpu::stream::Pointer<void>(reinterpret_cast<void*>(address),
-                                    platform_);
+  return wrapper::Pointer<void>(reinterpret_cast<void*>(address), platform_);
 }
 
-void SubAllocator::Deallocate(gpu::stream::Pointer<void> pointer) {
+void SubAllocator::Deallocate(wrapper::Pointer<void> pointer) {
   // TODO(apryakhin): Fill up with the deallocation logic and
   // consider providing a dedicated stream.
 }

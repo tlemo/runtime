@@ -25,8 +25,8 @@
 namespace tfrt {
 namespace gpu {
 
-llvm::Expected<RCReference<gpu::GpuBuffer>> BlockAllocator::Allocate(
-    size_t size, gpu::stream::Stream stream) {
+llvm::Expected<RCReference<gpu::GpuCrtBuffer>> BlockAllocator::Allocate(
+    size_t size, wrapper::Stream stream) {
   auto block = FindFreeBlock(size, stream);
   if (!block) {
     // Allocated a new and assume that allocation has gone through well.
@@ -42,23 +42,23 @@ llvm::Expected<RCReference<gpu::GpuBuffer>> BlockAllocator::Allocate(
                                 block->pointer.raw(sub_allocator_->platform())),
                             *block);
 
-  return TakeRef(new GpuBuffer(block->pointer, block->size, this));
+  return MakeRef<GpuCrtBuffer>(block->pointer, block->size, this);
 }
 
-void BlockAllocator::Deallocate(const gpu::GpuBuffer& buffer) {
+void BlockAllocator::Deallocate(const gpu::GpuCrtBuffer& buffer) {
   assert(buffer.IsValid());
   FreeBlock(reinterpret_cast<uintptr_t>(
       buffer.pointer().raw(sub_allocator_->platform())));
 }
 
-llvm::Error BlockAllocator::RecordUsage(const gpu::GpuBuffer&,
-                                        gpu::stream::Stream) {
+llvm::Error BlockAllocator::RecordUsage(const gpu::GpuCrtBuffer&,
+                                        wrapper::Stream) {
   // Nothing to do here, this allocator is currently just a stub.
   return llvm::Error::success();
 }
 
 llvm::Expected<BlockAllocator::Block> BlockAllocator::FindFreeBlock(
-    size_t size, gpu::stream::Stream stream) {
+    size_t size, wrapper::Stream stream) {
   // TODO(apryakhin): Add logic to control all possible block sizes
   // as well as the block spliting mechanism.
   // Lookup for an existing block that is the first

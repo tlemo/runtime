@@ -30,7 +30,7 @@ namespace gpu {
 llvm::Expected<RCReference<GpuDevice>> GetOrCreateGpuDevice(string_view name,
                                                             int gpu_ordinal,
                                                             HostContext* host) {
-  if (llvm::Error result = gpu::stream::Init(gpu::stream::Platform::CUDA))
+  if (llvm::Error result = wrapper::Init(wrapper::Platform::CUDA))
     return std::move(result);
 
   auto existing_device =
@@ -38,7 +38,7 @@ llvm::Expected<RCReference<GpuDevice>> GetOrCreateGpuDevice(string_view name,
   if (existing_device) {
     return std::move(existing_device);
   }
-  auto gpu_device = TakeRef(new GpuDevice(name, gpu_ordinal));
+  auto gpu_device = MakeRef<GpuDevice>(name, gpu_ordinal);
   if (auto error = gpu_device->Initialize()) {
     return std::move(error);
   }

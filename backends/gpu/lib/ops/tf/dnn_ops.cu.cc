@@ -22,9 +22,8 @@
 #include "tfrt/common/compat/eigen/eigen_dtype.h"
 #include "tfrt/dtype/dtype.h"
 #include "tfrt/gpu/memory/gpu_buffer.h"
-#include "tfrt/gpu/stream/cudart_wrapper.h"
-#include "tfrt/gpu/stream/stream_wrapper.h"
 #include "tfrt/gpu/tensor/dense_gpu_tensor.h"
+#include "tfrt/gpu/wrapper/cudart_wrapper.h"
 
 namespace tfrt {
 namespace gpu {
@@ -234,7 +233,7 @@ struct GpuLaunchConfig {
 // memory-limited.
 // REQUIRES: work_element_count > 0.
 llvm::Expected<GpuLaunchConfig> GetGpuLaunchConfig(
-    stream::CurrentContext current, int work_element_count) {
+    wrapper::CurrentContext current, int work_element_count) {
   using PropPair = std::pair<CUcontext, std::unique_ptr<cudaDeviceProp>>;
   // TODO(iga): If user keep creating contexts, this vector will grow forever.
   // Ideally, we should have some way to storing/retrieving per context state
@@ -256,7 +255,7 @@ llvm::Expected<GpuLaunchConfig> GetGpuLaunchConfig(
     // TODO(iga): Expose cuDeviceGetProperties instead. It has the
     // equivalent hipDeviceGetProperties.
     TFRT_ASSIGN_OR_RETURN(cudaDeviceProp tmp_props,
-                          stream::CudaGetDeviceProperties(current));
+                          wrapper::CudaGetDeviceProperties(current));
     configs->emplace_back(
         std::make_pair(cu_ctx, std::make_unique<cudaDeviceProp>(tmp_props)));
     props = configs->back().second.get();
@@ -280,10 +279,10 @@ llvm::Expected<GpuLaunchConfig> GetGpuLaunchConfig(
 
 template <typename T>
 struct TransformFilter {
-  llvm::Error operator()(stream::CurrentContext current,
-                         const stream::Stream& stream,
+  llvm::Error operator()(wrapper::CurrentContext current,
+                         const wrapper::Stream& stream,
                          ChannelOrder channel_order, const DenseGpuTensor& in,
-                         GpuBuffer* out) {
+                         GpuCrtBuffer* out) {
     Dimension<3> combined_dims;
     combined_dims[0] = in.shape().GetDimensionSize(0);  // spatial dimensions
     for (int i = 1; i < 2; i++) {
@@ -506,13 +505,16 @@ __global__ void FusedBatchNormInferenceMetaKernel(
 // with side input and activation.
 template <typename T, typename U>
 struct FusedBatchNormInferenceFunctor {
-  llvm::Error operator()(
-      stream::CurrentContext current, const stream::Stream& stream,
-      ChannelOrder channel_order, const DenseGpuTensor& input,
-      const DenseGpuTensor& scale, const DenseGpuTensor& bias,
-      const DenseGpuTensor& mean, const DenseGpuTensor& variance,
-      const DenseGpuTensor* side_input, float epsilon,
-      FusedBatchNormActivationMode activation_mode, GpuBuffer* output_buffer) {
+  llvm::Error operator()(wrapper::CurrentContext current,
+                         const wrapper::Stream& stream,
+                         ChannelOrder channel_order,
+                         const DenseGpuTensor& input,
+                         const DenseGpuTensor& scale,
+                         const DenseGpuTensor& bias, const DenseGpuTensor& mean,
+                         const DenseGpuTensor& variance,
+                         const DenseGpuTensor* side_input, float epsilon,
+                         FusedBatchNormActivationMode activation_mode,
+                         GpuCrtBuffer* output_buffer) {
     int32_t count = input.NumElements();
     if (count == 0) return llvm::Error::success();
 
@@ -530,7 +532,7 @@ struct FusedBatchNormInferenceFunctor {
         activation_mode == FusedBatchNormActivationMode::kRelu;
 
     auto launch = [&](auto* kernel, int channel_size, int inner_dim_size) {
-      return stream::CudaLaunchKernel(
+      return wrapper::CudaLaunchKernel(
           current, kernel, config.block_count, config.thread_per_block, 0,
           stream, count, channel_size, inner_dim_size, GetRawPointer<T>(input),
           GetRawPointer<U>(scale), GetRawPointer<U>(bias),
@@ -602,11 +604,11 @@ struct FusedBatchNormInferenceFunctor {
 
 }  // namespace
 
-llvm::Error TransformFilterTensor(stream::CurrentContext current,
-                                  const stream::Stream& stream,
+llvm::Error TransformFilterTensor(wrapper::CurrentContext current,
+                                  const wrapper::Stream& stream,
                                   ChannelOrder channel_order,
                                   const DenseGpuTensor& input_filter,
-                                  GpuBuffer* output_filter) {
+                                  GpuCrtBuffer* output_filter) {
   switch (input_filter.dtype().kind()) {
 #define DTYPE_NUMERIC(ENUM)                                                 \
   case DType::ENUM: {                                                       \
@@ -621,12 +623,12 @@ llvm::Error TransformFilterTensor(stream::CurrentContext current,
 }
 
 llvm::Error FusedBatchNormEx(
-    stream::CurrentContext current, const stream::Stream& stream,
+    wrapper::CurrentContext current, const wrapper::Stream& stream,
     ChannelOrder channel_order, const DenseGpuTensor& input,
     const DenseGpuTensor& scale, const DenseGpuTensor& bias,
     const DenseGpuTensor& mean, const DenseGpuTensor& variance,
     const DenseGpuTensor* side_input, float epsilon,
-    FusedBatchNormActivationMode activation_mode, GpuBuffer* output_buffer) {
+    FusedBatchNormActivationMode activation_mode, GpuCrtBuffer* output_buffer) {
   switch (input.dtype().kind()) {
     case DType::F16: {
       auto functor = FusedBatchNormInferenceFunctor<Eigen::half, float>();

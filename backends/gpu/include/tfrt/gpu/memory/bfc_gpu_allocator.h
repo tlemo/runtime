@@ -26,7 +26,7 @@
 
 #include "llvm/Support/Error.h"
 #include "tfrt/gpu/memory/gpu_allocator.h"
-#include "tfrt/gpu/stream/stream_wrapper.h"
+#include "tfrt/gpu/wrapper/driver_wrapper.h"
 #include "tfrt/host_context/host_context.h"
 #include "tfrt/support/mutex.h"
 #include "tfrt/support/ref_count.h"
@@ -42,20 +42,20 @@ namespace gpu {
 // coalescing.  One assumption we make is that the process using this
 // allocator owns pretty much all of the GPU memory, and that nearly
 // all requests to allocate GPU memory go through this interface.
-class BfcGpuAllocator : public gpu::GpuAllocator {
+class BfcGpuAllocator : public gpu::GpuCrtAllocator {
  public:
-  explicit BfcGpuAllocator(const stream::CurrentContext& current);
+  explicit BfcGpuAllocator(const wrapper::CurrentContext& current);
 
   // BfcGpuAllocator does not support streams. If it is asked to allocate
   // something on a stream different from the stream of any previous
   // allocations, the allocation request will fail.
-  llvm::Expected<RCReference<gpu::GpuBuffer>> Allocate(
-      size_t num_bytes, gpu::stream::Stream stream) override;
+  llvm::Expected<RCReference<gpu::GpuCrtBuffer>> Allocate(
+      size_t num_bytes, wrapper::Stream stream) override;
 
-  void Deallocate(const gpu::GpuBuffer& buffer) override;
+  void Deallocate(const gpu::GpuCrtBuffer& buffer) override;
 
-  llvm::Error RecordUsage(const gpu::GpuBuffer& buffer,
-                          gpu::stream::Stream stream) override;
+  llvm::Error RecordUsage(const gpu::GpuCrtBuffer& buffer,
+                          wrapper::Stream stream) override;
 
  private:
   struct Bin;
@@ -126,9 +126,9 @@ class BfcGpuAllocator : public gpu::GpuAllocator {
   }
 
   // Structures immutable after construction
-  stream::Context context_;
+  wrapper::Context context_;
   // The base pointer where all the GPU memory begins.
-  stream::DeviceMemory<void> base_ptr_;
+  wrapper::DeviceMemory<void> base_ptr_;
   uint64_t gpu_memory_size_ = 0;
 
   // Map from bin size to Bin
@@ -147,7 +147,7 @@ class BfcGpuAllocator : public gpu::GpuAllocator {
   //  - the allocator is not notified when the stream is destroyed. So, the
   //  synchronization can happen after the stream is destroyed causing
   //  segfault.
-  gpu::stream::Stream stream_ TFRT_GUARDED_BY(mu_);
+  wrapper::Stream stream_ TFRT_GUARDED_BY(mu_);
 };
 
 }  // namespace gpu

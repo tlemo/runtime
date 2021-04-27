@@ -25,13 +25,13 @@
 
 #include "llvm/ADT/FunctionExtras.h"
 #include "llvm/Support/raw_ostream.h"
-#include "tfrt/gpu/stream/stream_wrapper.h"
+#include "tfrt/gpu/wrapper/wrapper.h"
 #include "tfrt/support/ref_count.h"
 
 namespace tfrt {
 namespace gpu {
 
-class GpuAllocator;
+class GpuCrtAllocator;
 
 // GpuBuffer represents a range of GPU memory.
 // GpuBuffer is the type that is produced by the allocator. Besides the
@@ -43,25 +43,25 @@ class GpuAllocator;
 // GpuBuffers own their memory.
 // GpuBuffers are thread-safe.
 // GpuBuffers are neither copyable nor movable.
-class GpuBuffer : public ReferenceCounted<GpuBuffer> {
+class GpuCrtBuffer : public ReferenceCounted<GpuCrtBuffer> {
  public:
   // Creates a buffer with base `pointer`, holding `size` bytes, that will be
   // deallocated using `allocator` when destroyed.
   // `pointer` must have been obtained from the `allocator`.
   // Prefer using GpuAllocator::Allocate instead of creating buffers manually.
-  GpuBuffer(gpu::stream::Pointer<void> pointer, size_t size,
-            GpuAllocator* allocator);
+  GpuCrtBuffer(wrapper::Pointer<void> pointer, size_t size,
+               GpuCrtAllocator* allocator);
 
-  using Deallocator = llvm::unique_function<void(GpuBuffer* buffer)>;
+  using Deallocator = llvm::unique_function<void(GpuCrtBuffer* buffer)>;
   // Create a GpuBuffer by taking ownership of an externally allocated GPU
   // buffer. `deallocator` is called with `pointer` and `size` as arguments when
   // we destroy this buffer.
-  GpuBuffer(gpu::stream::Pointer<void> pointer, size_t size,
-            Deallocator deallocator);
+  GpuCrtBuffer(wrapper::Pointer<void> pointer, size_t size,
+               Deallocator deallocator);
 
-  ~GpuBuffer();
+  ~GpuCrtBuffer();
 
-  const gpu::stream::Pointer<void>& pointer() const { return pointer_; }
+  const wrapper::Pointer<void>& pointer() const { return pointer_; }
 
   // Returns the number of `bytes` held by this buffer.
   size_t size() const { return size_; }
@@ -70,7 +70,7 @@ class GpuBuffer : public ReferenceCounted<GpuBuffer> {
 
  private:
   // Pointer value of 0 means that the buffer is not pointing to valid memory.
-  gpu::stream::Pointer<void> pointer_;
+  wrapper::Pointer<void> pointer_;
 
   // Size of this buffer in bytes, i.e. number of bytes in the GPU memory that
   // this buffer represents.
@@ -81,7 +81,7 @@ class GpuBuffer : public ReferenceCounted<GpuBuffer> {
   // TODO(zhangqiaorjc): Use variant instead of union.
   union {
     // The allocator that allocated this buffer.
-    GpuAllocator* allocator_;
+    GpuCrtAllocator* allocator_;
 
     // The deallocator function that can be used to deallocate the externally
     // allocated buffer.
@@ -90,11 +90,12 @@ class GpuBuffer : public ReferenceCounted<GpuBuffer> {
 };
 
 template <typename T>
-T* GetRawPointer(const GpuBuffer& buffer) {
+T* GetRawPointer(const GpuCrtBuffer& buffer) {
   return static_cast<T*>(buffer.pointer().raw());
 }
 
-llvm::raw_ostream& operator<<(llvm::raw_ostream& os, const GpuBuffer& buffer);
+llvm::raw_ostream& operator<<(llvm::raw_ostream& os,
+                              const GpuCrtBuffer& buffer);
 
 }  // namespace gpu
 }  // namespace tfrt

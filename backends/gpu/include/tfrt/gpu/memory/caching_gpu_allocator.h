@@ -24,25 +24,31 @@
 
 #include "llvm/Support/Error.h"
 #include "tfrt/gpu/memory/gpu_allocator.h"
-#include "tfrt/gpu/stream/stream_wrapper.h"
+#include "tfrt/gpu/wrapper/wrapper.h"
+#include "tfrt/host_context/async_value_ref.h"
 #include "tfrt/support/ref_count.h"
 
 namespace tfrt {
 namespace gpu {
+class GpuContext;
 
 // CachingGpuAllocator is thread-safe.
-class CachingGpuAllocator : public GpuAllocator {
+class CachingGpuAllocator : public GpuCrtAllocator {
  public:
-  llvm::Expected<RCReference<gpu::GpuBuffer>> Allocate(
-      size_t size, gpu::stream::Stream stream) override;
+  explicit CachingGpuAllocator(AsyncValueRef<GpuContext> context);
+  ~CachingGpuAllocator() override;
 
-  void Deallocate(const gpu::GpuBuffer& buffer) override;
+  llvm::Expected<RCReference<gpu::GpuCrtBuffer>> Allocate(
+      size_t size, wrapper::Stream stream) override;
 
-  llvm::Error RecordUsage(const gpu::GpuBuffer& buffer,
-                          gpu::stream::Stream stream) override;
+  void Deallocate(const gpu::GpuCrtBuffer& buffer) override;
+
+  llvm::Error RecordUsage(const gpu::GpuCrtBuffer& buffer,
+                          wrapper::Stream stream) override;
 
  private:
-  std::map<gpu::stream::Pointer<void>, gpu::stream::Context> allocations_;
+  std::map<wrapper::Pointer<void>, wrapper::Context> allocations_;
+  AsyncValueRef<GpuContext> context_;
 };
 
 }  // namespace gpu

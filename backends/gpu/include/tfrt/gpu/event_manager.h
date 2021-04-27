@@ -25,7 +25,7 @@
 #include <thread>
 
 #include "llvm/ADT/PointerIntPair.h"
-#include "tfrt/gpu/stream/stream_wrapper.h"
+#include "tfrt/gpu/wrapper/driver_wrapper.h"
 #include "tfrt/host_context/async_value_ref.h"
 #include "tfrt/support/mutex.h"
 #include "tfrt/support/thread_annotations.h"
@@ -40,12 +40,12 @@ namespace gpu {
 // A ref-counted owned GPU event.
 class RcEvent : public ReferenceCounted<RcEvent> {
  public:
-  explicit RcEvent(stream::OwningEvent event) : event_(std::move(event)) {}
+  explicit RcEvent(wrapper::OwningEvent event) : event_(std::move(event)) {}
 
-  stream::Event get() const { return event_.get(); }
+  wrapper::Event get() const { return event_.get(); }
 
  private:
-  stream::OwningEvent event_;
+  wrapper::OwningEvent event_;
 };
 
 // EventManager implements efficient waiting and polling for events. The

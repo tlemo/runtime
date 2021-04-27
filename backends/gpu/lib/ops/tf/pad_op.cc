@@ -34,8 +34,8 @@
 #include "tfrt/gpu/core_runtime/gpu_op_registry.h"
 #include "tfrt/gpu/core_runtime/gpu_op_utils.h"
 #include "tfrt/gpu/memory/gpu_buffer.h"
-#include "tfrt/gpu/stream/stream_wrapper.h"
 #include "tfrt/gpu/tensor/dense_gpu_tensor.h"
+#include "tfrt/gpu/wrapper/driver_wrapper.h"
 #include "tfrt/host_context/host_context.h"
 #include "tfrt/support/error_util.h"
 #include "tfrt/support/logging.h"
@@ -133,7 +133,7 @@ llvm::Expected<DenseGpuTensor> EnqueueGpuPadOp(
     GpuDispatchContext* dctx, const DenseGpuTensor& input,
     const DenseView& paddings, const TensorMetadata& result_md) {
   size_t size_in_bytes = result_md.GetHostSizeInBytes();
-  TFRT_ASSIGN_OR_RETURN(RCReference<GpuBuffer> buffer,
+  TFRT_ASSIGN_OR_RETURN(RCReference<GpuCrtBuffer> buffer,
                         dctx->allocator()->Allocate(
                             /*size=*/size_in_bytes, dctx->stream()));
 
@@ -176,8 +176,6 @@ static llvm::Expected<DenseGpuTensor> GpuPadFoldedOp(
   return EnqueueGpuPadOp(dctx, input, paddings, result_md);
 }
 
-}  // namespace gpu
-
 void RegisterPadGpuTfOps(GpuOpRegistry* registry) {
   registry->AddOp("tf.Pad", TFRT_GPU_OP(gpu::GpuPadOp));
 
@@ -186,4 +184,5 @@ void RegisterPadGpuTfOps(GpuOpRegistry* registry) {
   registry->AddOp("_tf.Pad", TFRT_GPU_OP(gpu::GpuPadFoldedOp), {"paddings"});
 }
 
+}  // namespace gpu
 }  // namespace tfrt

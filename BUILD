@@ -279,9 +279,13 @@ tfrt_cc_library(
     ] + select({
         ":use_std_thread": [],
         "//conditions:default": [
-            "//third_party/absl/synchronization",
-            "//third_party/absl/time",
-            "//thread",
+            # copybara:uncomment_begin
+            # # We want to have `bazel query` (sic! bazel is translated to bazel
+            # # by copybara) work for OSS, and these targets are only valid internally.
+            # "//third_party/absl/synchronization",
+            # "//third_party/absl/time",
+            # "//thread",
+            # copybara:uncomment_end
         ],
     }),
 )
@@ -473,6 +477,8 @@ tfrt_cc_library(
     name = "mlirtobef",
     srcs = [
         "include/tfrt/host_context/debug_info.h",
+        "lib/bef_converter/mlir_to_bef/bef_compilation_units.cc",
+        "lib/bef_converter/mlir_to_bef/bef_compilation_units.h",
         "lib/bef_converter/mlir_to_bef/mlir_to_bef.cc",
     ],
     hdrs = [

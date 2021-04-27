@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-// This file declares some helpers that tfrt::GpuDevice uses to interact with
-// Eigen.
+// This file declares some helpers that tfrt::gpu::GpuDevice uses to interact
+// with Eigen.
 
 #ifndef TFRT_BACKENDS_GPU_LIB_DEVICE_EIGEN_SUPPORT_H_
 #define TFRT_BACKENDS_GPU_LIB_DEVICE_EIGEN_SUPPORT_H_
@@ -24,8 +24,8 @@
 
 #include "tfrt/common/compat/eigen/tensor_types.h"
 #include "tfrt/dtype/dtype.h"
-#include "tfrt/gpu/stream/stream_wrapper.h"
 #include "tfrt/gpu/tensor/dense_gpu_tensor.h"
+#include "tfrt/gpu/wrapper/driver_wrapper.h"
 
 namespace Eigen {
 class StreamInterface;
@@ -34,7 +34,7 @@ struct GpuDevice;
 
 namespace tfrt {
 namespace gpu {
-namespace detail {
+namespace internal {
 // Use custom deleters so we don't need to include Eigen headers.
 struct EigenStreamInterfaceDeleter {
   void operator()(::Eigen::StreamInterface* interface) const;
@@ -43,17 +43,17 @@ struct EigenGpuDeviceDeleter {
   void operator()(::Eigen::GpuDevice* device) const;
 };
 
-}  // namespace detail
+}  // namespace internal
 
 using OwningEigenStreamInterface =
     std::unique_ptr<::Eigen::StreamInterface,
-                    detail::EigenStreamInterfaceDeleter>;
+                    internal::EigenStreamInterfaceDeleter>;
 using OwningEigenGpuDevice =
-    std::unique_ptr<::Eigen::GpuDevice, detail::EigenGpuDeviceDeleter>;
+    std::unique_ptr<::Eigen::GpuDevice, internal::EigenGpuDeviceDeleter>;
 
 // Creates and returns an owning handle to an Eigen::StreamInterface instance,
 // which wraps the GPU stream 'stream'.
-OwningEigenStreamInterface CreateEigenStreamInterface(stream::Stream stream);
+OwningEigenStreamInterface CreateEigenStreamInterface(wrapper::Stream stream);
 
 // Creates and returns an owning handle to an Eigen::GpuDevice instance,
 // which launches GPU kernels on the GPU stream wrapped by 'interface'.

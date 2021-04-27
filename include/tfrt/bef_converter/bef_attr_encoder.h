@@ -22,6 +22,7 @@
 #include "tfrt/bef_converter/bef_emitter.h"
 #include "tfrt/support/bef_encoding.h"
 #include "tfrt/support/forward_decls.h"
+#include "tfrt/support/type_traits.h"
 
 namespace tfrt {
 
@@ -30,40 +31,144 @@ namespace tfrt {
 // functions inside headers for TensorShape, and other user defined types.
 
 // This class serializes BEF attributes.
-class BefAttrEncoder : public BEFEmitter {
+class BefAttrEncoder : public BefEmitter {
  public:
-  llvm::Error EncodeUnrankedShapeAttr();
-  llvm::Error EncodeRankedShapeAttr(ArrayRef<int64_t> dims);
+  // Encode a generic attribute.
+  //   Supported attribute types:
+  //     char,
+  //     uint8_t, uint16_t, uint32_t, uint64_t,
+  //     int8_t, int16_t, int32_t, int64_t,
+  //     float, double
+  template <typename T>
+  size_t EncodeAttr(T attr);
 
-  llvm::Error EncodeShapeListAttr(const int64_t** dims, const int* num_dims,
-                                  int num_values);
+  // <Array size:VBR> [array payload]*
+  // Empty element representation: Array, Aggregate, UnrankedShape
+  //    <0>
+  template <typename T>
+  size_t EncodeArrayAttr(ArrayRef<T> array);
 
-  llvm::Error EncodeStringAttr(string_view sv);
+  size_t EncodeEmptyAttribute() {
+    EmitByte(0);
+    return size() - 1;
+  }
 
-  llvm::Error EncodeStringListAttr(const void* const* values,
-                                   const size_t* lengths, int num_values);
+  // Encode a unranked shape attribute.
+  size_t EncodeUnrankedShapeAttr();
 
-  llvm::Error EncodeFuncAttr(string_view sv);
+  // Encode a ranked shape attribute.
+  size_t EncodeRankedShapeAttr(ArrayRef<int64_t> dims);
 
-  llvm::Error EncodeFuncListAttr(const void* const* values,
-                                 const size_t* lengths, int num_values);
+  // Encode a list of shapes as an aggregate attribute.
+  size_t EncodeShapeListAttr(const int64_t** dims, const int* num_dims,
+                             int num_values);
+
+  // Encode a string attribute.
+  size_t EncodeStringAttr(string_view sv);
+
+  // Encode a list of strings as an aggregate attribute.
+  size_t EncodeStringListAttr(const void* const* values, const size_t* lengths,
+                              int num_values);
+
+  // Encode a function attribute.
+  size_t EncodeFuncAttr(string_view sv);
+
+  // Encode a list of functions as an aggregate attribute.
+  size_t EncodeFuncListAttr(const void* const* values, const size_t* lengths,
+                            int num_values);
+
+  // Reserve space for the header part of an aggregate attribute.
+  size_t ReserveAggregatedAttrHeader(size_t element_count);
+
+  // Complete encoding of an aggregate attribute.
+  void EncodeCompleteAggregatedAttr(
+      size_t element_count, size_t offset,
+      ArrayRef<BEFAggregateAttrOffset32_t> offsets);
+
+  // Reserve space for the header part of an array attribute.
+  size_t ReserveArrayAttrHeader() {
+    return ReserveHeaderSpace(alignof(BEFArrayAttr), sizeof(BEFArrayAttr));
+  }
+
+  // Complete encoding of an array attribute.
+  void EncodeCompleteArrayAttr(size_t offset, BEFAttributeType element_type,
+                               size_t element_count, size_t element_offset);
+
+  // Reserve space for the header part of a dense (tensor) attribute.
+  size_t ReserveDenseAttrHeader() {
+    return ReserveHeaderSpace(alignof(BEFDenseAttr), sizeof(BEFDenseAttr));
+  }
+
+  // Complete encoding of a densor (tensor) attribute.
+  void EncodeCompleteDenseAttr(size_t offset, DType::Kind element_type,
+                               size_t rank, size_t shape_offset,
+                               size_t num_elements, size_t element_offset);
 
  private:
-  void EncodeAttrBase(BEFAttributeType type, size_t byte_count);
+  size_t ReserveHeaderSpace(size_t alignment, size_t header_size);
+
+  size_t EncodeAttrBase(BEFAttributeType type, size_t byte_count);
 
   // Encode a list of attributes as an aggregate attribute in BEF. The `emitter`
   // will be called with the indices sequentially and is expected to emit the
   // bytes for this element and return the offset.
-  llvm::Error EncodeListAttr(
+  size_t EncodeListAttr(
       size_t num_elements,
-      llvm::function_ref<llvm::Expected<BEFAggregateAttrOffset32_t>(int)>
-          emitter);
+      llvm::function_ref<BEFAggregateAttrOffset32_t(int)> emitter);
 
   // A helper function to emit the common header for both ranked and unranked
   // shape attributes. If `rank` is a negative number, then this shape is
   // unranked.
-  void EncodeShapeAttrBase(size_t byte_count, int rank);
+  size_t EncodeShapeAttrBase(size_t byte_count, int rank);
+
+  template <typename T>
+  static constexpr bool kSupportedScalarAttributeType =
+      IsOneOfTypes<T, char, uint8_t, uint16_t, uint32_t, uint64_t, int8_t,
+                   int16_t, int32_t, int64_t, float, double>();
 };
+
+template <typename T>
+size_t BefAttrEncoder::EncodeAttr(T attr) {
+  static_assert(kSupportedScalarAttributeType<T>);
+
+  const auto entry_size = sizeof(attr);
+
+  // A shortcut for 1 byte sized attribute.
+  if (entry_size == 1) {
+    EmitByte(static_cast<uint8_t>(attr));
+    return size() - 1;
+  }
+
+  EmitAlignment(alignof(T));
+  const auto offset = size();
+  EmitBytes(
+      llvm::makeArrayRef(reinterpret_cast<const uint8_t*>(&attr), entry_size));
+  return offset;
+}
+
+// <Array size:VBR> [array payload]*
+template <typename T>
+size_t BefAttrEncoder::EncodeArrayAttr(ArrayRef<T> array) {
+  static_assert(kSupportedScalarAttributeType<T>);
+
+  const auto element_count = array.size();
+
+  // Empty array attribute representation should be matched with
+  // empty aggregate attribute representation: <0>
+  if (element_count == 0) {
+    return EncodeEmptyAttribute();
+  }
+
+  EmitAlignment(alignof(T),
+                llvm::offsetToAlignment(size() + GetSizeOfVbrInt(element_count),
+                                        llvm::Align(alignof(T))));
+  const auto offset = size();
+  EmitVbrInt(element_count);
+  assert(size() % alignof(T) == 0);
+  EmitBytes(llvm::makeArrayRef(reinterpret_cast<const uint8_t*>(array.data()),
+                               element_count * sizeof(T)));
+  return offset;
+}
 
 }  // namespace tfrt
 

@@ -20,13 +20,12 @@
 #ifndef TFRT_GPU_CORE_RUNTIME_TENSOR_UTIL_H_
 #define TFRT_GPU_CORE_RUNTIME_TENSOR_UTIL_H_
 
-#include "tfrt/gpu/stream/stream_wrapper.h"
+#include "tfrt/gpu/wrapper/wrapper.h"
 #include "tfrt/support/forward_decls.h"
 
 namespace tfrt {
 
 class HostContext;
-class GpuDispatchContext;
 template <typename T>
 class AsyncValueRef;
 class DenseHostTensor;
@@ -34,16 +33,18 @@ class TensorConversionFnRegistry;
 
 namespace gpu {
 
-class GpuAllocator;
+class GpuCrtAllocator;
+class GpuDispatchContext;
 class DenseGpuTensor;
 
 AsyncValueRef<DenseHostTensor> ConvertDenseGpuTensorToDenseHostTensor(
-    stream::CurrentContext current_context, stream::Stream stream,
+    wrapper::CurrentContext current_context, wrapper::Stream stream,
     const DenseGpuTensor& tensor, HostContext* host);
 
 Expected<DenseGpuTensor> ConvertDenseHostTensorToDenseGpuTensor(
-    stream::CurrentContext current_context, stream::Stream stream,
-    GpuAllocator* allocator, const DenseHostTensor& tensor, HostContext* host);
+    wrapper::CurrentContext current_context, wrapper::Stream stream,
+    GpuCrtAllocator* allocator, const DenseHostTensor& tensor,
+    HostContext* host);
 
 void RegisterGpuTensorConversionFn(TensorConversionFnRegistry* registry);
 

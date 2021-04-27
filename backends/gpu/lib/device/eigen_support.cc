@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This file declares some helpers that tfrt::GpuDevice uses to interact with
-// Eigen.
+// This file declares some helpers that tfrt::gpu::GpuDevice uses to interact
+// with Eigen.
 
 #include "eigen_support.h"
 
@@ -28,7 +28,7 @@ namespace gpu {
 namespace {
 class EigenStreamInterface : public Eigen::StreamInterface {
  public:
-  explicit EigenStreamInterface(stream::Stream stream)
+  explicit EigenStreamInterface(wrapper::Stream stream)
       : stream_(static_cast<gpuStream_t>(stream)) {
     Eigen::initializeDeviceProp();
   }
@@ -56,17 +56,16 @@ class EigenStreamInterface : public Eigen::StreamInterface {
 };
 }  // namespace
 
-namespace detail {
-void EigenStreamInterfaceDeleter::operator()(
+void internal::EigenStreamInterfaceDeleter::operator()(
     ::Eigen::StreamInterface* interface) const {
   delete interface;
 }
-void EigenGpuDeviceDeleter::operator()(::Eigen::GpuDevice* device) const {
+void internal::EigenGpuDeviceDeleter::operator()(
+    ::Eigen::GpuDevice* device) const {
   delete device;
 }
-}  // namespace detail
 
-OwningEigenStreamInterface CreateEigenStreamInterface(stream::Stream stream) {
+OwningEigenStreamInterface CreateEigenStreamInterface(wrapper::Stream stream) {
   return OwningEigenStreamInterface(new EigenStreamInterface(stream));
 }
 

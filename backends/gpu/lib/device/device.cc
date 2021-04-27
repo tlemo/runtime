@@ -21,12 +21,12 @@
 #include "tfrt/gpu/device/gpu_config.h"
 #include "tfrt/gpu/memory/bfc_gpu_allocator.h"
 #include "tfrt/gpu/memory/gpu_allocator.h"
-#include "tfrt/gpu/stream/cublas_wrapper.h"
+#include "tfrt/gpu/wrapper/cublas_wrapper.h"
 #include "tfrt/support/error_util.h"
 #include "tfrt/support/string_util.h"
 
 namespace tfrt {
-using gpu::stream::CtxSetCurrent;  // TODO(csigg): remove once ADL is fixed.
+namespace gpu {
 
 class GpuDevice::Impl {
  public:
@@ -39,35 +39,35 @@ class GpuDevice::Impl {
   // TODO(sanjoy): we need to figure out how the lifetimes of these objects
   // interact with the lifetime of the GPU op handler.
 
-  gpu::stream::Device device_;
+  wrapper::Device device_;
 
   // NB! The declaration order here is important.  We want to destroy
   // owned_context_ last.
   //
   // If `owned_context_` is null, `context_` points to a non-owning context.
   // Otherwise, `context_` is set to be `owned_context_.get()`.
-  gpu::stream::OwningContext owned_context_;
-  gpu::stream::Context context_;
+  wrapper::OwningContext owned_context_;
+  wrapper::Context context_;
   // If `owned_stream` is null, `stream_` points to a non-owning stream.
   // Otherwise, `stream_` is set to be `owned_stream_.get()`.
-  gpu::stream::OwningStream owned_stream_;
-  gpu::stream::Stream stream_;
-  gpu::stream::OwningBlasHandle blas_handle_;
-  gpu::stream::OwningDnnHandle dnn_handle_;
+  wrapper::OwningStream owned_stream_;
+  wrapper::Stream stream_;
+  wrapper::OwningBlasHandle blas_handle_;
+  wrapper::OwningDnnHandle dnn_handle_;
 
   // NB! The declaration order here is important. The eigen_gpu_device_
   // references eigen_stream_interface_, which references stream_.
   gpu::OwningEigenStreamInterface eigen_stream_interface_;
   gpu::OwningEigenGpuDevice eigen_gpu_device_;
 
-  std::unique_ptr<gpu::GpuAllocator> allocator_;
+  std::unique_ptr<gpu::GpuCrtAllocator> allocator_;
 };
 
 llvm::Error GpuDevice::Impl::Initialize() {
   // TODO(zhangqiaorjc): Generalize to multi-GPU.
   TFRT_ASSIGN_OR_RETURN(device_,
-                        DeviceGet(gpu::stream::Platform::CUDA, gpu_ordinal_));
-  llvm::Optional<gpu::stream::CurrentContext> current_context;
+                        DeviceGet(wrapper::Platform::CUDA, gpu_ordinal_));
+  llvm::Optional<wrapper::CurrentContext> current_context;
 
   // Use external GPU resources if they are available.
   if (auto gpu_resources = gpu::GetTfrtGpuResources(device_)) {
@@ -76,7 +76,7 @@ llvm::Error GpuDevice::Impl::Initialize() {
     TFRT_ASSIGN_OR_RETURN(auto current, CtxSetCurrent(context_));
     current_context.emplace(current);
 
-    allocator_ = std::unique_ptr<gpu::GpuAllocator>(
+    allocator_ = std::unique_ptr<gpu::GpuCrtAllocator>(
         gpu_resources->allocator_factory(context_));
 
     stream_ = gpu_resources->stream;
@@ -86,13 +86,12 @@ llvm::Error GpuDevice::Impl::Initialize() {
     TFRT_ASSIGN_OR_RETURN(auto current, CtxSetCurrent(context_));
     current_context.emplace(current);
 
-    TFRT_ASSIGN_OR_RETURN(
-        owned_stream_,
-        StreamCreate(current, gpu::stream::StreamFlags::DEFAULT));
+    TFRT_ASSIGN_OR_RETURN(owned_stream_,
+                          StreamCreate(current, wrapper::StreamFlags::DEFAULT));
     stream_ = owned_stream_.get();
 
-    allocator_ =
-        std::unique_ptr<gpu::GpuAllocator>(new gpu::BfcGpuAllocator(current));
+    allocator_ = std::unique_ptr<gpu::GpuCrtAllocator>(
+        new gpu::BfcGpuAllocator(current));
   }
 
   eigen_stream_interface_ = gpu::CreateEigenStreamInterface(stream_);
@@ -100,15 +99,15 @@ llvm::Error GpuDevice::Impl::Initialize() {
 
   // TODO(iga): Only log errors during BLAS handle creation?
   TFRT_ASSIGN_OR_RETURN(blas_handle_, BlasCreate(*current_context));
-  if (auto error = gpu::stream::BlasSetStream(blas_handle_.get(), stream_))
+  if (auto error = wrapper::BlasSetStream(blas_handle_.get(), stream_))
     return error;
-  if (auto error = gpu::stream::CublasSetMathMode(
+  if (auto error = wrapper::CublasSetMathMode(
           static_cast<cublasHandle_t>(blas_handle_.get()),
           CUBLAS_TENSOR_OP_MATH))
     return error;
 
-  TFRT_ASSIGN_OR_RETURN(dnn_handle_, gpu::stream::DnnCreate(*current_context));
-  if (auto error = gpu::stream::DnnSetStream(dnn_handle_.get(), stream_))
+  TFRT_ASSIGN_OR_RETURN(dnn_handle_, wrapper::DnnCreate(*current_context));
+  if (auto error = wrapper::DnnSetStream(dnn_handle_.get(), stream_))
     return error;
 
   return Error::success();
@@ -119,9 +118,9 @@ GpuDevice::GpuDevice(string_view name, int gpu_ordinal)
 
 llvm::Error GpuDevice::Initialize() { return impl_->Initialize(); }
 
-gpu::stream::Stream GpuDevice::stream() const { return impl_->stream_; }
+wrapper::Stream GpuDevice::stream() const { return impl_->stream_; }
 
-gpu::GpuAllocator* GpuDevice::allocator() const {
+gpu::GpuCrtAllocator* GpuDevice::allocator() const {
   return impl_->allocator_.get();
 }
 
@@ -129,18 +128,23 @@ Eigen::GpuDevice* GpuDevice::eigen_gpu_device() const {
   return impl_->eigen_gpu_device_.get();
 }
 
-gpu::stream::BlasHandle GpuDevice::blas_handle() const {
+wrapper::BlasHandle GpuDevice::blas_handle() const {
   return impl_->blas_handle_.get();
 }
 
-gpu::stream::DnnHandle GpuDevice::dnn_handle() const {
+wrapper::DnnHandle GpuDevice::dnn_handle() const {
   return impl_->dnn_handle_.get();
 }
 
-gpu::stream::CurrentContext GpuDevice::CreateContext() const {
+wrapper::CurrentContext GpuDevice::CreateContext() const {
   // FIXME(sanjoy): Add proper error handling.
   llvm::ExitOnError die_if_error;
   return die_if_error(CtxSetCurrent(impl_->context_));
 }
 
+llvm::Expected<wrapper::CurrentContext> GpuDevice::SetCurrentContext() const {
+  return CtxSetCurrent(impl_->context_);
+}
+
+}  // namespace gpu
 }  // namespace tfrt

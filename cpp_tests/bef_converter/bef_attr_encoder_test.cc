@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
-// Unit test for TFRT BEFAttrEncoder.
+// Unit test for TFRT BefAttrEncoder.
 
 #include "tfrt/bef_converter/bef_attr_encoder.h"
 
 #include <cstdint>
 #include <vector>
 
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
@@ -30,50 +31,113 @@
 namespace tfrt {
 namespace {
 
-TEST(BEFAttrEncoderTest, EncodeZeroShape) {
+template <typename T>
+void TestBasicTypeEncoding(T value) {
+  BefAttrEncoder encoder;
+
+  size_t offset = encoder.EncodeAttr(value);
+  auto buffer = encoder.TakeResult();
+  Attribute<T> attr(buffer.data() + offset);
+
+  EXPECT_EQ(attr.get(), value);
+}
+
+constexpr uint16_t kTestUint8 = 12;
+constexpr uint16_t kTestUint16 = 23;
+constexpr uint32_t kTestUint32 = 4567;
+constexpr uint64_t kTestUint64 = 12345678L;
+constexpr float kTestFloat = 3.14;
+constexpr float kTestDouble = 3.141592;
+TEST(BefAttrEncoderTest, EncodeBasicTypes) {
+  TestBasicTypeEncoding(kTestUint8);
+  TestBasicTypeEncoding(kTestUint16);
+  TestBasicTypeEncoding(kTestUint32);
+  TestBasicTypeEncoding(kTestUint64);
+  TestBasicTypeEncoding(kTestFloat);
+  TestBasicTypeEncoding(kTestDouble);
+}
+
+constexpr int32_t kTestInt32Array[] = {1, 2, 3, 4, 5, 6, 7};
+constexpr auto kTestInt32ArraySize = sizeof(kTestInt32Array) / sizeof(int32_t);
+TEST(BefAttrEncoderTest, EncodeInt32ArrayAttribute) {
+  auto input_array_ref =
+      llvm::makeArrayRef(kTestInt32Array, kTestInt32ArraySize);
+
+  BefAttrEncoder encoder;
+
+  size_t offset = encoder.EncodeArrayAttr(input_array_ref);
+  auto buffer = encoder.TakeResult();
+  ArrayAttribute<int32_t> attr(buffer.data() + offset);
+  EXPECT_EQ(kTestInt32ArraySize, attr.size());
+  EXPECT_THAT(attr.data(), ::testing::ContainerEq(input_array_ref));
+}
+
+TEST(BefAttrEncoderTest, EncodeEmptyArray) {
+  BefAttrEncoder encoder;
+
+  size_t offset =
+      encoder.EncodeArrayAttr(llvm::makeArrayRef(kTestInt32Array, 0));
+  auto buffer = encoder.TakeResult();
+  ArrayAttribute<int32_t> attr(buffer.data() + offset);
+  EXPECT_EQ(attr.size(), 0);
+}
+
+constexpr double kTestDoubleArray[] = {1.1, 2.2, 3.3, 4.4, 5.5,
+                                       6.6, 7.7, 8.8, 9.9};
+constexpr auto kTestDoubleArraySize = sizeof(kTestDoubleArray) / sizeof(double);
+TEST(BefAttrEncoderTest, EncodeDoubleArrayAttribute) {
+  auto input_array_ref =
+      llvm::makeArrayRef(kTestDoubleArray, kTestDoubleArraySize);
+
+  BefAttrEncoder encoder;
+  size_t offset = encoder.EncodeArrayAttr(input_array_ref);
+  auto buffer = encoder.TakeResult();
+  ArrayAttribute<double> attr(buffer.data() + offset);
+  EXPECT_EQ(kTestDoubleArraySize, attr.size());
+  EXPECT_THAT(attr.data(), ::testing::ContainerEq(input_array_ref));
+}
+
+TEST(BefAttrEncoderTest, EncodeZeroShape) {
   int64_t dims[1];
 
   BefAttrEncoder encoder;
-  ASSERT_TRUE(!encoder.EncodeRankedShapeAttr(llvm::makeArrayRef(dims, 0)));
+  const size_t offset =
+      encoder.EncodeRankedShapeAttr(llvm::makeArrayRef(dims, 0));
 
   AlignedBuffer<8> buf = encoder.TakeResult();
-  RankedShapeAttr shape_attr(buf.data());
+  ShapeAttr shape_attr(buf.data() + offset);
 
-  ASSERT_EQ(shape_attr.size(), sizeof(BEFShapeAttr));
-  ASSERT_EQ(shape_attr.GetRank(), 0);
+  EXPECT_EQ(shape_attr.GetRank(), 0);
   ArrayRef<int64_t> shape = shape_attr.GetShape();
-  ASSERT_EQ(shape.size(), 0);
+  EXPECT_EQ(shape.size(), 0);
 }
 
-TEST(BEFAttrEncoderTest, EncodeUnrankedShape) {
+TEST(BefAttrEncoderTest, EncodeUnrankedShape) {
   BefAttrEncoder encoder;
-  ASSERT_TRUE(!encoder.EncodeUnrankedShapeAttr());
+  const size_t offset = encoder.EncodeUnrankedShapeAttr();
 
   AlignedBuffer<8> buf = encoder.TakeResult();
-  ShapeAttr shape_attr(buf.data());
+  ShapeAttr shape_attr(buf.data() + offset);
 
   ASSERT_FALSE(shape_attr.HasRank());
 }
 
-TEST(BEFAttrEncoderTest, EncodeRankedShape) {
+TEST(BefAttrEncoderTest, EncodeRankedShape) {
   int64_t dims[3] = {1, 2, 3};
+  auto input_shape = llvm::makeArrayRef(dims, 3);
 
   BefAttrEncoder encoder;
-  ASSERT_TRUE(!encoder.EncodeRankedShapeAttr(llvm::makeArrayRef(dims, 3)));
+  const size_t offset = encoder.EncodeRankedShapeAttr(input_shape);
 
   AlignedBuffer<8> buf = encoder.TakeResult();
-  RankedShapeAttr shape_attr(buf.data());
+  ShapeAttr shape_attr(buf.data() + offset);
 
-  ASSERT_EQ(shape_attr.GetRank(), 3);
+  EXPECT_EQ(shape_attr.GetRank(), 3);
 
-  ArrayRef<int64_t> shape = shape_attr.GetShape();
-  ASSERT_EQ(shape.size(), 3);
-  ASSERT_EQ(shape[0], 1);
-  ASSERT_EQ(shape[1], 2);
-  ASSERT_EQ(shape[2], 3);
+  EXPECT_THAT(shape_attr.GetShape(), ::testing::ContainerEq(input_shape));
 }
 
-TEST(BEFAttrEncoderTest, EncodeShapeList) {
+TEST(BefAttrEncoderTest, EncodeShapeList) {
   const int64_t a[1] = {1};
   const int64_t b[2] = {2, 3};
   const int64_t c[3] = {4, 5, 6};
@@ -82,62 +146,57 @@ TEST(BEFAttrEncoderTest, EncodeShapeList) {
   int sizes[4] = {1, 2, 3, -1};
 
   BefAttrEncoder encoder;
-  ASSERT_TRUE(!encoder.EncodeShapeListAttr(dims, sizes, 4));
+  const size_t offset = encoder.EncodeShapeListAttr(dims, sizes, 4);
 
   AlignedBuffer<8> buf = encoder.TakeResult();
-  AggregateAttr aggr_attr(buf.data());
+  AggregateAttr aggr_attr(buf.data() + offset);
 
-  ASSERT_EQ(aggr_attr.GetNumElements(), 4);
+  EXPECT_EQ(aggr_attr.GetNumElements(), 4);
 
-  RankedShapeAttr shape_a = aggr_attr.GetAttributeOfType<RankedShapeAttr>(0);
-  ArrayRef<int64_t> elems_array_a = shape_a.GetShape();
-  ASSERT_EQ(elems_array_a.size(), 1);
-  ASSERT_EQ(elems_array_a[0], 1);
+  ShapeAttr shape_a = aggr_attr.GetAttributeOfType<ShapeAttr>(0);
+  EXPECT_THAT(shape_a.GetShape(),
+              ::testing::ContainerEq(llvm::makeArrayRef(a, 1)));
 
-  RankedShapeAttr shape_b = aggr_attr.GetAttributeOfType<RankedShapeAttr>(1);
-  ArrayRef<int64_t> elems_array_b = shape_b.GetShape();
-  ASSERT_EQ(elems_array_b.size(), 2);
-  ASSERT_EQ(elems_array_b[0], 2);
-  ASSERT_EQ(elems_array_b[1], 3);
+  ShapeAttr shape_b = aggr_attr.GetAttributeOfType<ShapeAttr>(1);
+  EXPECT_THAT(shape_b.GetShape(),
+              ::testing::ContainerEq(llvm::makeArrayRef(b, 2)));
 
-  RankedShapeAttr shape_c = aggr_attr.GetAttributeOfType<RankedShapeAttr>(2);
-  ArrayRef<int64_t> elems_array_c = shape_c.GetShape();
-  ASSERT_EQ(elems_array_c.size(), 3);
-  ASSERT_EQ(elems_array_c[0], 4);
-  ASSERT_EQ(elems_array_c[1], 5);
-  ASSERT_EQ(elems_array_c[2], 6);
+  ShapeAttr shape_c = aggr_attr.GetAttributeOfType<ShapeAttr>(2);
+  EXPECT_THAT(shape_c.GetShape(),
+              ::testing::ContainerEq(llvm::makeArrayRef(c, 3)));
 
   ShapeAttr shape_d = aggr_attr.GetAttributeOfType<ShapeAttr>(3);
   ASSERT_FALSE(shape_d.HasRank());
 }
 
-TEST(BEFAttrEncoderTest, EncodeEmptyString) {
+TEST(BefAttrEncoderTest, EncodeEmptyString) {
   BefAttrEncoder encoder;
   std::string empty_string = "";
-  ASSERT_TRUE(!encoder.EncodeStringAttr(string_view(empty_string.data(), 0)));
+  const size_t offset =
+      encoder.EncodeStringAttr(string_view(empty_string.data(), 0));
 
   AlignedBuffer<8> buf = encoder.TakeResult();
-  StringAttr string_attr(buf.data());
+  StringAttr string_attr(buf.data() + offset);
 
-  ASSERT_EQ(string_attr.GetValue().size(), 0);
+  EXPECT_EQ(string_attr.GetValue().size(), 0);
 }
 
-TEST(BEFAttrEncoderTest, EncodeString) {
+TEST(BefAttrEncoderTest, EncodeString) {
   BefAttrEncoder encoder;
   std::string sample_string = "tfrt";
-  ASSERT_TRUE(!encoder.EncodeStringAttr(
-      string_view(sample_string.data(), sample_string.size())));
+  const size_t offset = encoder.EncodeStringAttr(
+      string_view(sample_string.data(), sample_string.size()));
 
   AlignedBuffer<8> buf = encoder.TakeResult();
-  StringAttr string_attr(buf.data());
+  StringAttr string_attr(buf.data() + offset);
 
   string_view sv = string_attr.GetValue();
 
-  ASSERT_EQ(sv.size(), 4);
-  ASSERT_EQ(sv, "tfrt");
+  EXPECT_EQ(sv.size(), 4);
+  EXPECT_EQ(sv, "tfrt");
 }
 
-TEST(BEFAttrEncoderTest, EncodeStringList) {
+TEST(BefAttrEncoderTest, EncodeStringList) {
   const std::string a = "hi";
   const std::string b = "tfrt";
   const std::string c = "world";
@@ -147,30 +206,27 @@ TEST(BEFAttrEncoderTest, EncodeStringList) {
   size_t sizes[3] = {a.size(), b.size(), c.size()};
 
   BefAttrEncoder encoder;
-  ASSERT_TRUE(!encoder.EncodeStringListAttr(values, sizes, 3));
+  const size_t offset = encoder.EncodeStringListAttr(values, sizes, 3);
 
   AlignedBuffer<8> buf = encoder.TakeResult();
-  AggregateAttr aggr_attr(buf.data());
+  AggregateAttr aggr_attr(buf.data() + offset);
 
-  ASSERT_EQ(aggr_attr.GetNumElements(), 3);
+  EXPECT_EQ(aggr_attr.GetNumElements(), 3);
 
   StringAttr str_a_attr = aggr_attr.GetAttributeOfType<StringAttr>(0);
   string_view str_a = str_a_attr.GetValue();
-  ASSERT_EQ(str_a.size(), a.size());
-  ASSERT_EQ(str_a, a);
+  EXPECT_EQ(str_a, a);
 
   StringAttr str_b_attr = aggr_attr.GetAttributeOfType<StringAttr>(1);
   string_view str_b = str_b_attr.GetValue();
-  ASSERT_EQ(str_b.size(), b.size());
-  ASSERT_EQ(str_b, b);
+  EXPECT_EQ(str_b, b);
 
   StringAttr str_c_attr = aggr_attr.GetAttributeOfType<StringAttr>(2);
   string_view str_c = str_c_attr.GetValue();
-  ASSERT_EQ(str_c.size(), c.size());
-  ASSERT_EQ(str_c, c);
+  EXPECT_EQ(str_c, c);
 }
 
-TEST(BEFAttrEncoderTest, EncodeFuncList) {
+TEST(BefAttrEncoderTest, EncodeFuncList) {
   const std::string a = "tf";
   const std::string b = "new";
   const std::string c = "runtime";
@@ -180,27 +236,24 @@ TEST(BEFAttrEncoderTest, EncodeFuncList) {
   size_t sizes[3] = {a.size(), b.size(), c.size()};
 
   BefAttrEncoder encoder;
-  ASSERT_TRUE(!encoder.EncodeFuncListAttr(values, sizes, 3));
+  const size_t offset = encoder.EncodeFuncListAttr(values, sizes, 3);
 
   AlignedBuffer<8> buf = encoder.TakeResult();
-  AggregateAttr aggr_attr(buf.data());
+  AggregateAttr aggr_attr(buf.data() + offset);
 
-  ASSERT_EQ(aggr_attr.GetNumElements(), 3);
+  EXPECT_EQ(aggr_attr.GetNumElements(), 3);
 
   FuncAttr str_a_attr = aggr_attr.GetAttributeOfType<FuncAttr>(0);
   string_view str_a = str_a_attr.GetFunctionName();
-  ASSERT_EQ(str_a.size(), a.size());
-  ASSERT_EQ(str_a, a);
+  EXPECT_EQ(str_a, a);
 
   FuncAttr str_b_attr = aggr_attr.GetAttributeOfType<FuncAttr>(1);
   string_view str_b = str_b_attr.GetFunctionName();
-  ASSERT_EQ(str_b.size(), b.size());
-  ASSERT_EQ(str_b, b);
+  EXPECT_EQ(str_b, b);
 
   FuncAttr str_c_attr = aggr_attr.GetAttributeOfType<FuncAttr>(2);
   string_view str_c = str_c_attr.GetFunctionName();
-  ASSERT_EQ(str_c.size(), c.size());
-  ASSERT_EQ(str_c, c);
+  EXPECT_EQ(str_c, c);
 }
 
 }  // namespace

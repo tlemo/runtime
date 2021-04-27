@@ -19,8 +19,8 @@
 
 #include "tfrt/gpu/device/device.h"
 #include "tfrt/gpu/memory/gpu_allocator.h"
-#include "tfrt/gpu/stream/stream_wrapper.h"
 #include "tfrt/gpu/tensor/dense_gpu_tensor.h"
+#include "tfrt/gpu/wrapper/wrapper.h"
 #include "tfrt/host_context/async_dispatch.h"
 #include "tfrt/host_context/async_value_ref.h"
 #include "tfrt/host_context/execution_context.h"
@@ -34,14 +34,14 @@
 namespace tfrt {
 namespace gpu {
 
-using gpu::stream::EventFlags;
-using gpu::stream::EventRecord;
-using gpu::stream::EventSynchronize;
-using gpu::stream::OwningEvent;
-using gpu::stream::Pointer;
+using wrapper::EventFlags;
+using wrapper::EventRecord;
+using wrapper::EventSynchronize;
+using wrapper::OwningEvent;
+using wrapper::Pointer;
 
 AsyncValueRef<DenseHostTensor> ConvertDenseGpuTensorToDenseHostTensor(
-    stream::CurrentContext current_context, stream::Stream stream,
+    wrapper::CurrentContext current_context, wrapper::Stream stream,
     const DenseGpuTensor& gpu_tensor, HostContext* host) {
   llvm::Optional<DenseHostTensor> result_or_error =
       DenseHostTensor::CreateUninitialized(gpu_tensor.metadata(), host);
@@ -102,15 +102,16 @@ DenseGpuTensorToDenseHostTensorConversionFn(const DenseGpuTensor& tensor,
 }
 
 Expected<DenseGpuTensor> ConvertDenseHostTensorToDenseGpuTensor(
-    stream::CurrentContext current_context, stream::Stream stream,
-    GpuAllocator* allocator, const DenseHostTensor& tensor, HostContext* host) {
+    wrapper::CurrentContext current_context, wrapper::Stream stream,
+    GpuCrtAllocator* allocator, const DenseHostTensor& tensor,
+    HostContext* host) {
   size_t size_in_bytes = tensor.metadata().GetHostSizeInBytes();
 
-  llvm::Expected<RCReference<gpu::GpuBuffer>> buffer_or_error =
+  llvm::Expected<RCReference<gpu::GpuCrtBuffer>> buffer_or_error =
       allocator->Allocate(
           /*size=*/size_in_bytes, stream);
   if (!buffer_or_error) return buffer_or_error.takeError();
-  RCReference<gpu::GpuBuffer> buffer = std::move(*buffer_or_error);
+  RCReference<gpu::GpuCrtBuffer> buffer = std::move(*buffer_or_error);
 
   Pointer<const void> memcpy_src(tensor.data(), current_context.platform());
   if (auto error = MemcpyAsync(current_context, /*dst=*/buffer->pointer(),

@@ -19,23 +19,23 @@
 #define TFRT_BACKENDS_GPU_LIB_OPS_TF_DNN_OPS_CU_H_
 
 #include "tfrt/common/ops/tf/dnn_ops_util.h"
-#include "tfrt/gpu/stream/stream_wrapper.h"
+#include "tfrt/gpu/wrapper/wrapper.h"
 
 namespace tfrt {
 namespace gpu {
 class DenseGpuTensor;
-class GpuBuffer;
+class GpuCrtBuffer;
 
 // Transposes `input_filter` according to `channel_order` and writes the
 // output into `output_filter` buffer.
 // `input_filter` is assumed to be in HWIO layout.
 // If `channel_order` is ChannelFirst, does HWIO -> OIHW transform.
 // If `channel_order` is ChannelLast, does HWIO -> OHWI transform.
-llvm::Error TransformFilterTensor(stream::CurrentContext current,
-                                  const stream::Stream& stream,
+llvm::Error TransformFilterTensor(wrapper::CurrentContext current,
+                                  const wrapper::Stream& stream,
                                   ChannelOrder channel_order,
                                   const DenseGpuTensor& input_filter,
-                                  GpuBuffer* output_filter);
+                                  GpuCrtBuffer* output_filter);
 
 // FusedBatchNormEx op supports side inputs and activations:
 //   (1) batch_norm + activation
@@ -43,12 +43,12 @@ llvm::Error TransformFilterTensor(stream::CurrentContext current,
 enum class FusedBatchNormActivationMode { kIdentity, kRelu };
 
 llvm::Error FusedBatchNormEx(
-    stream::CurrentContext current, const stream::Stream& stream,
+    wrapper::CurrentContext current, const wrapper::Stream& stream,
     ChannelOrder channel_order, const DenseGpuTensor& input,
     const DenseGpuTensor& scale, const DenseGpuTensor& bias,
     const DenseGpuTensor& mean, const DenseGpuTensor& variance,
     const DenseGpuTensor* side_input, float epsilon,
-    FusedBatchNormActivationMode activation_mode, GpuBuffer* output_buffer);
+    FusedBatchNormActivationMode activation_mode, GpuCrtBuffer* output_buffer);
 
 }  // namespace gpu
 }  // namespace tfrt

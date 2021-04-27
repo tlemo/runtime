@@ -17,14 +17,14 @@
 // Load MLIR and apply required passes on it.
 
 #include "mlir/Support/MlirOptMain.h"
-#include "tfrt/gpu/kernels/cuda_opdefs/cuda_ops.h"
-#include "tfrt/gpu/kernels/cuda_opdefs/cuda_test_ops.h"
+#include "tfrt/gpu/kernels/gpu_ops.h"
+#include "tfrt/gpu/kernels/gpu_test_ops.h"
 #include "tfrt/init_tfrt_dialects.h"
 
 int main(int argc, char **argv) {
   mlir::DialectRegistry registry;
   tfrt::RegisterTFRTDialects(registry);
-  registry.insert<tfrt::cuda::CUDADialect>();
-  registry.insert<tfrt::cuda::CUDATestDialect>();
+  registry.insert<tfrt::gpu::GpuDialect>();
+  registry.insert<tfrt::gpu::GpuTestDialect>();
   return failed(mlir::MlirOptMain(argc, argv, "TFRT pass driver\n", registry));
 }
