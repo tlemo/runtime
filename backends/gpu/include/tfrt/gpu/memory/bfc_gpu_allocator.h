@@ -49,7 +49,7 @@ class BfcGpuAllocator : public gpu::GpuCrtAllocator {
   // BfcGpuAllocator does not support streams. If it is asked to allocate
   // something on a stream different from the stream of any previous
   // allocations, the allocation request will fail.
-  llvm::Expected<RCReference<gpu::GpuCrtBuffer>> Allocate(
+  llvm::Expected<RCReference<GpuCrtBuffer>> AllocateBuffer(
       size_t num_bytes, wrapper::Stream stream) override;
 
   void Deallocate(const gpu::GpuCrtBuffer& buffer) override;

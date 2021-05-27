@@ -16,14 +16,14 @@
 #include "tfrt/gpu/wrapper/rocfft_wrapper.h"
 
 #include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/raw_ostream.h"
 #include "wrapper_detail.h"
 
 namespace tfrt {
 namespace gpu {
 namespace wrapper {
 
-template void internal::LogResult(llvm::raw_ostream&, rocfft_status);
+template llvm::raw_ostream& internal::operator<<(
+    llvm::raw_ostream&, const ErrorData<rocfft_status>&);
 
 llvm::raw_ostream& operator<<(llvm::raw_ostream& os, rocfft_status status) {
   switch (status) {
@@ -63,7 +63,7 @@ void internal::PlanDescriptionDeleter::operator()(
   LogIfError(RocfftPlanDescriptionDestroy(description));
 }
 
-// TOD(gkg): Figure out format of the version string, parse it and return as
+// TODO(gkg): Figure out format of the version string, parse it and return as
 // struct RocfftLibraryVersion {int major; int minor; int patch; };
 // to be consistent with CufftGetVersion.
 llvm::Expected<std::string> RocfftGetVersionString() {

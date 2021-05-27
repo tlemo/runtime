@@ -17,11 +17,11 @@
 
 #include <immintrin.h>
 
+#include "blas_support.h"
 #include "tfrt/core_runtime/op_attr_type.h"
 #include "tfrt/core_runtime/op_attrs.h"
 #include "tfrt/core_runtime/op_utils.h"
 #include "tfrt/dtype/dtype.h"
-#include "tfrt/gpu/blas_support.h"
 #include "tfrt/gpu/core_runtime/gpu_dispatch_context.h"
 #include "tfrt/gpu/core_runtime/gpu_op_registry.h"
 #include "tfrt/gpu/core_runtime/gpu_op_utils.h"
@@ -128,7 +128,7 @@ static llvm::Expected<DenseGpuTensor> GpuMatmulOp(
 
   size_t size_in_bytes = result_md.GetHostSizeInBytes();
   TFRT_ASSIGN_OR_RETURN(RCReference<GpuCrtBuffer> buffer,
-                        dctx->allocator()->Allocate(
+                        dctx->allocator()->AllocateBuffer(
                             /*size=*/size_in_bytes, dctx->stream()));
 
   if (size_in_bytes == 0) {

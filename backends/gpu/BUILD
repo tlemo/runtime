@@ -1,4 +1,4 @@
-load("@tf_runtime//third_party/mlir:tblgen.bzl", "gentbl")
+load("@tf_runtime//third_party/mlir:tblgen.bzl", "gentbl_cc_library")
 load("@tf_runtime//:build_defs.bzl", "tfrt_cc_binary", "tfrt_cc_library")
 load(
     # copybara:uncomment_begin
@@ -8,6 +8,7 @@ load(
     # copybara:comment_end
     "cuda_library",
 )
+load("@local_cuda//:defs.bzl", "if_local_cuda")  # copybara:comment
 
 package(
     default_visibility = [":__subpackages__"],
@@ -41,6 +42,7 @@ package_group(
         # # Authorized users go here.
         # "//platforms/xla/tests/gpu/...",
         # "//third_party/tensorflow/compiler/xla/service/gpu/...",
+        # "//third_party/tensorflow/compiler/mlir/tfrt/...",
         # "@tf_runtime//cpp_tests/...",
         # "//learning/brain/experimental/tfrt/cpp_tests/...",
         # copybara:uncomment_end_and_comment_begin
@@ -86,8 +88,13 @@ tfrt_cc_library(
 )
 
 # Generated API implementations for CUDA libraries.
-# Note: Only gpu_wrapper should depend on cuda_stubs, and
-# --@rules_cuda//cuda:cuda_runtime should be set to this target.
+#
+# No target (with the exception of :cuda_wrapper) should explicitly depend on
+# this. It should rather be used (through .bazelrc) as
+# '--@rules_cuda//cuda:cuda_runtime=@tf_runtime//backends/gpu:cuda_stubs'
+# which makes all cuda_library() targets implicitly depend on it.
+#
+# Not used internally, but we want to include it in CI builds.
 tfrt_cc_library(
     name = "cuda_stubs",
     srcs = [
@@ -106,11 +113,12 @@ tfrt_cc_library(
         # "@cuda_headers",
         # "@cudnn_headers//:cudnn_header",
         # copybara:uncomment_end_and_comment_begin
-        # TODO(csigg): change to @cuda_headers once crt is included.
+    ] + if_local_cuda([
         "@local_cuda//:cuda_headers",
         "@cudnn_headers",
-        # copybara:comment_end
         "@tf_runtime//third_party/cuda:stub_inc",
+    ]) + [
+        # copybara:comment_end
     ],
 )
 
@@ -132,9 +140,11 @@ tfrt_cc_library(
     srcs = [
         "include/tfrt/gpu/wrapper/cuda_forwards.h",
         "lib/wrapper/blas_wrapper.cc",
+        "lib/wrapper/cublas_enums.cc",
         "lib/wrapper/cublas_wrapper.cc",
         "lib/wrapper/cuda_wrapper.cc",
         "lib/wrapper/cudart_wrapper.cc",
+        "lib/wrapper/cudnn_enums.cc",
         "lib/wrapper/cudnn_wrapper.cc",
         "lib/wrapper/cufft_wrapper.cc",
         "lib/wrapper/cusolver_wrapper.cc",
@@ -143,7 +153,9 @@ tfrt_cc_library(
         "lib/wrapper/fft_wrapper.cc",
         "lib/wrapper/hash_utils.cc",
         "lib/wrapper/hip_wrapper.cc",
+        "lib/wrapper/miopen_enums.cc",
         "lib/wrapper/miopen_wrapper.cc",
+        "lib/wrapper/rocblas_enums.cc",
         "lib/wrapper/rocblas_wrapper.cc",
         "lib/wrapper/rocfft_wrapper.cc",
         "lib/wrapper/solver_wrapper.cc",
@@ -171,6 +183,7 @@ tfrt_cc_library(
     ],
     visibility = [
         ":tests_and_tools",
+        ":xla_friends",
     ],
     deps = [
         ":rocm_stubs",
@@ -196,19 +209,13 @@ tfrt_cc_library(
     name = "gpu_memory",
     srcs = [
         "lib/memory/bfc_gpu_allocator.cc",
-        "lib/memory/block_allocator.cc",
-        "lib/memory/caching_gpu_allocator.cc",
         "lib/memory/gpu_allocator.cc",
         "lib/memory/gpu_buffer.cc",
-        "lib/memory/sub_allocator.cc",
     ],
     hdrs = [
         "include/tfrt/gpu/memory/bfc_gpu_allocator.h",
-        "include/tfrt/gpu/memory/block_allocator.h",
-        "include/tfrt/gpu/memory/caching_gpu_allocator.h",
         "include/tfrt/gpu/memory/gpu_allocator.h",
         "include/tfrt/gpu/memory/gpu_buffer.h",
-        "include/tfrt/gpu/memory/sub_allocator.h",
     ],
     visibility = [":tests_and_tools"],
     deps = [
@@ -256,22 +263,6 @@ tfrt_cc_library(
         "@tf_runtime//:hostcontext",
         "@tf_runtime//:support",
         "@tf_runtime//:tensor",
-    ],
-)
-
-tfrt_cc_library(
-    name = "gpu_event_manager",
-    srcs = [
-        "lib/event_manager.cc",
-    ],
-    hdrs = [
-        "include/tfrt/gpu/event_manager.h",
-    ],
-    deps = [
-        ":gpu_wrapper",
-        "@llvm-project//llvm:Support",
-        "@tf_runtime//:hostcontext",
-        "@tf_runtime//:support",
     ],
 )
 
@@ -424,17 +415,6 @@ tfrt_cc_library(
 )
 
 tfrt_cc_library(
-    name = "blas_support",
-    hdrs = [
-        "include/tfrt/gpu/blas_support.h",
-    ],
-    deps = [
-        ":gpu_wrapper",
-        "@llvm-project//llvm:Support",
-    ],
-)
-
-tfrt_cc_library(
     name = "gpu_tf_ops",
     srcs = [
         "lib/ops/tf/gpu_ops.cc",
@@ -561,7 +541,6 @@ tfrt_cc_library(
         "include/tfrt/gpu/ops/tf/relu_f32_kernel.h",
         "include/tfrt/gpu/ops/tf/relu_f64_kernel.h",
     ],
-    includes = ["backends/gpu/include"],
 )
 
 tfrt_cc_library(
@@ -647,11 +626,13 @@ cuda_library(
 
 tfrt_cc_library(
     name = "tf_gpu_matmul_op",
-    srcs = ["lib/ops/tf/matmul_op.cc"],
+    srcs = [
+        "lib/ops/tf/blas_support.h",
+        "lib/ops/tf/matmul_op.cc",
+    ],
     hdrs = ["lib/ops/tf/matmul_op.h"],
     copts = ["-mf16c"],
     deps = [
-        ":blas_support",
         ":gpu_memory",
         ":gpu_op_handler",
         ":gpu_tensor",
@@ -670,6 +651,7 @@ tfrt_cc_library(
 cuda_library(
     name = "tf_gpu_pad_op",
     srcs = [
+        "lib/ops/tf/blas_support.h",
         "lib/ops/tf/pad_op.cc",
         "lib/ops/tf/pad_op.cu.cc",
     ],
@@ -685,7 +667,6 @@ cuda_library(
         ],
     }),
     deps = [
-        ":blas_support",
         ":gpu_device_eigen_support",
         ":gpu_memory",
         ":gpu_op_handler",
@@ -718,32 +699,34 @@ tfrt_cc_library(
     ],
 )
 
-filegroup(
-    name = "gpu_test_opdefs_ops",
-    srcs = [
-        "include/tfrt/gpu/kernels/gpu_test_ops.h",
-    ],
-)
-
-gentbl(
+gentbl_cc_library(
     name = "gpu_opdefs_inc_gen",
+    includes = [
+        "../../include",
+        "include",
+    ],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/gpu/kernels/gpu_opdefs.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/gpu/kernels/gpu_opdefs.cpp.inc",
+        ),
+        (
+            ["--gen-typedef-decls"],
+            "include/tfrt/gpu/kernels/gpu_typedefs.h.inc",
+        ),
+        (
+            ["--gen-typedef-defs"],
+            "include/tfrt/gpu/kernels/gpu_typedefs.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/gpu/kernels/gpu_ops.td",
-    td_includes = [
-        "include",
-        "backends/gpu/include",
-    ],
     td_srcs = [
+        "@llvm-project//mlir:SideEffectTdFiles",
         "@tf_runtime//:OpBaseTdFiles",
         "include/tfrt/gpu/kernels/gpu_blas_ops.td",
         "include/tfrt/gpu/kernels/gpu_dnn_ops.td",
@@ -753,50 +736,27 @@ gentbl(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "gpu_conversion_helper_opdefs_inc_gen",
+    includes = [
+        "../../include",
+        "include",
+    ],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/gpu/kernels/gpu_conversion_helper_opdefs.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/gpu/kernels/gpu_conversion_helper_opdefs.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/gpu/kernels/gpu_conversion_helper_ops.td",
-    td_includes = [
-        "include",
-        "backends/gpu/include",
-    ],
     td_srcs = [
+        "@llvm-project//mlir:GPUOpsTdFiles",
         "@tf_runtime//:OpBaseTdFiles",
-    ],
-)
-
-gentbl(
-    name = "gpu_test_opdefs_inc_gen",
-    tbl_outs = [
-        (
-            "-gen-op-decls",
-            "include/tfrt/gpu/kernels/gpu_test_opdefs.h.inc",
-        ),
-        (
-            "-gen-op-defs",
-            "include/tfrt/gpu/kernels/gpu_test_opdefs.cpp.inc",
-        ),
-    ],
-    tblgen = "@llvm-project//mlir:mlir-tblgen",
-    td_file = "include/tfrt/gpu/kernels/gpu_test_ops.td",
-    td_includes = [
-        "include",
-        "backends/gpu/include",
-    ],
-    td_srcs = [
-        "@tf_runtime//:OpBaseTdFiles",
-        "include/tfrt/gpu/kernels/gpu_ops_base.td",
     ],
 )
 
@@ -808,6 +768,9 @@ tfrt_cc_library(
     deps = [
         ":gpu_conversion_helper_opdefs_inc_gen",
         ":gpu_opdefs_inc_gen",
+        ":gpu_wrapper",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:GPUDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
         "@tf_runtime//:basic_kernels_opdefs",
@@ -816,22 +779,20 @@ tfrt_cc_library(
 )
 
 tfrt_cc_library(
-    name = "gpu_test_opdefs",
-    srcs = [
-        "lib/kernels/gpu_test_ops.cc",
-    ],
-    hdrs = [
-        ":gpu_test_opdefs_ops",
-    ],
+    name = "gpu_passes",
+    srcs = ["lib/pass/pass.cc"],
+    hdrs = ["include/tfrt/gpu/pass/pass.h"],
     visibility = ["@tf_runtime//:friends"],
     deps = [
         ":gpu_opdefs",
-        ":gpu_opdefs_inc_gen",
-        ":gpu_test_opdefs_inc_gen",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:MemRefDialect",
+        "@llvm-project//mlir:Rewrite",
+        "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:Transforms",
         "@tf_runtime//:basic_kernels_opdefs",
-        "@tf_runtime//:tensor_opdefs",
     ],
 )
 
@@ -845,9 +806,11 @@ tfrt_cc_library(
         "lib/kernels/solver_kernels.cc",
     ],
     alwayslink_static_registration_src = "lib/kernels/static_registration.cc",
-    visibility = [":tests_and_tools"],
+    visibility = [
+        ":tests_and_tools",
+        ":xla_friends",
+    ],
     deps = [
-        ":gpu_event_manager",
         ":gpu_memory",
         ":gpu_tensor",
         ":gpu_types",
@@ -861,33 +824,12 @@ tfrt_cc_library(
     ],
 )
 
-tfrt_cc_library(
-    name = "gpu_test_kernels",
-    srcs = [
-        "lib/kernels/kernels_detail.h",
-        "lib/kernels/test_kernels.cc",
-        "lib/kernels/test_kernels.h",
-    ],
-    alwayslink_static_registration_src = "lib/kernels/test_static_registration.cc",
-    visibility = [":tests_and_tools"],
-    deps = [
-        ":gpu_memory",
-        ":gpu_types",
-        ":gpu_wrapper",
-        "@llvm-project//llvm:Support",
-        "@tf_runtime//:hostcontext",
-        "@tf_runtime//:support",
-        "@tf_runtime//:tensor",
-    ],
-)
-
 tfrt_cc_binary(
     name = "tfrt_gpu_opt",
     srcs = ["tools/tfrt_gpu_opt/tfrt_gpu_opt.cc"],
     visibility = [":tests_and_tools"],
     deps = [
         ":gpu_opdefs",
-        ":gpu_test_opdefs",
         "@llvm-project//mlir:MlirOptLib",
         "@tf_runtime//:init_tfrt_dialects",
     ],
@@ -899,7 +841,6 @@ tfrt_cc_binary(
     visibility = [":tests_and_tools"],
     deps = [
         ":gpu_opdefs",
-        ":gpu_test_opdefs",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Translation",
@@ -914,6 +855,7 @@ tfrt_cc_library(
     name = "gpu_types",
     srcs = ["lib/gpu_types.cc"],
     hdrs = ["include/tfrt/gpu/gpu_types.h"],
+    visibility = [":xla_friends"],
     deps = [
         ":gpu_wrapper",
         "@llvm-project//llvm:Support",

@@ -22,6 +22,7 @@
 #include <iostream>  // some eigen header use std::cerr without including it.
 
 #include "../../device/eigen_support.h"
+#include "blas_support.h"
 #include "tfrt/common/compat/eigen/eigen_dtype.h"
 #include "tfrt/common/compat/eigen/tensor_types.h"
 #include "tfrt/common/ops/tf/dnn_ops_util.h"
@@ -29,7 +30,6 @@
 #include "tfrt/core_runtime/op_attrs.h"
 #include "tfrt/core_runtime/op_utils.h"
 #include "tfrt/dtype/dtype.h"
-#include "tfrt/gpu/blas_support.h"
 #include "tfrt/gpu/core_runtime/gpu_dispatch_context.h"
 #include "tfrt/gpu/core_runtime/gpu_op_registry.h"
 #include "tfrt/gpu/core_runtime/gpu_op_utils.h"
@@ -41,7 +41,7 @@
 #include "tfrt/support/logging.h"
 #include "tfrt/support/string_util.h"
 #include "tfrt/tensor/tensor_serialize_utils.h"
-#include "unsupported/Eigen/CXX11/src/Tensor/TensorDeviceGpu.h"  // from @eigen_archive
+#include "unsupported/Eigen/CXX11/Tensor"  // from @eigen_archive
 
 namespace tfrt {
 namespace gpu {
@@ -134,7 +134,7 @@ llvm::Expected<DenseGpuTensor> EnqueueGpuPadOp(
     const DenseView& paddings, const TensorMetadata& result_md) {
   size_t size_in_bytes = result_md.GetHostSizeInBytes();
   TFRT_ASSIGN_OR_RETURN(RCReference<GpuCrtBuffer> buffer,
-                        dctx->allocator()->Allocate(
+                        dctx->allocator()->AllocateBuffer(
                             /*size=*/size_in_bytes, dctx->stream()));
 
   if (size_in_bytes == 0) {

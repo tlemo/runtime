@@ -1,4 +1,4 @@
-load("@tf_runtime//third_party/mlir:tblgen.bzl", "gentbl")
+load("@tf_runtime//third_party/mlir:tblgen.bzl", "gentbl_cc_library")
 load("@tf_runtime//:build_defs.bzl", "tfrt_cc_library")
 # copybara:uncomment load("//tools/build_defs/proto/cpp:cc_proto_library.bzl", "cc_proto_library")
 
@@ -214,27 +214,29 @@ filegroup(
         "@tf_runtime//:OpBaseTdFiles",
         "@tf_runtime//:include/tfrt/core_runtime/opdefs/corert_base.td",
     ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = ["@tf_runtime//:friends"],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "cpurt_opdefs_inc_gen",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = [
+        "../../include",
+        "include",
+    ],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/cpu/jit/opdefs/cpurt_ops.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/cpu/jit/opdefs/cpurt_ops.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/cpu/jit/opdefs/cpurt_ops.td",
-    td_includes = [
-        "include",
-        "backends/cpu/include",
-    ],
     td_srcs = [":cpurt_ops_td_files"],
 )
 
@@ -242,6 +244,7 @@ tfrt_cc_library(
     name = "cpurt_opdefs",
     srcs = ["lib/jit/opdefs/cpurt_ops.cc"],
     hdrs = ["include/tfrt/cpu/jit/opdefs/cpurt_ops.h"],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = ["@tf_runtime//:friends"],
     deps = [
         ":cpurt_opdefs_inc_gen",
@@ -261,6 +264,7 @@ tfrt_cc_library(
     deps = [
         ":async_runtime",
         ":async_runtime_api",
+        ":cpurt_support",
         "@llvm-project//llvm:OrcJIT",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:AMXToLLVMIRTranslation",
@@ -297,9 +301,19 @@ tfrt_cc_library(
         "@llvm-project//mlir:VectorToLLVM",
         "@llvm-project//mlir:X86VectorToLLVMIRTranslation",
         "@llvm-project//mlir:mlir_c_runner_utils",
+        "@tf_runtime//:dtype",
         "@tf_runtime//:hostcontext",
         "@tf_runtime//:support",
         "@tf_runtime//:tensor",
+    ],
+)
+
+tfrt_cc_library(
+    name = "cpurt_support",
+    hdrs = ["include/tfrt/cpu/jit/cpurt_support.h"],
+    visibility = ["@tf_runtime//:friends"],
+    deps = [
+        "@llvm-project//mlir:IR",
     ],
 )
 

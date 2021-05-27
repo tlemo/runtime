@@ -20,13 +20,13 @@
 #include "tfrt/bef_executor/bef_file.h"
 
 #include "bef_file_impl.h"
+#include "tfrt/bef/bef_encoding.h"
+#include "tfrt/bef/bef_reader.h"
 #include "tfrt/host_context/async_value.h"
 #include "tfrt/host_context/debug_info.h"
 #include "tfrt/host_context/host_context.h"
 #include "tfrt/host_context/location.h"
 #include "tfrt/host_context/native_function.h"
-#include "tfrt/support/bef_encoding.h"
-#include "tfrt/support/bef_reader.h"
 #include "tfrt/support/error_util.h"
 #include "tfrt/support/variant.h"
 
@@ -435,11 +435,11 @@ RCReference<BEFFile> BEFFile::Open(ArrayRef<uint8_t> file,
   auto* bef_impl = new BEFFileImpl(error_handler);
   auto bef_rc = TakeRef(bef_impl);
 
-  if (reinterpret_cast<uintptr_t>(file.data()) % BefGetRequiredAlignment() !=
+  if (reinterpret_cast<uintptr_t>(file.data()) % GetRequiredBefAlignment() !=
       0) {
     bef_impl->EmitFormatError(
         StrCat("The BEF file memory should be aligned by ",
-               BefGetRequiredAlignment()));
+               GetRequiredBefAlignment()));
     return {};
   }
 
@@ -565,6 +565,10 @@ DecodedLocation BEFFileImpl::DecodeLocation(size_t location_position_offset) {
 
   // Read from location_positions_section_, from the specified offset.
   BEFReader reader(location_positions_section_);
+
+  // A location offset could be larger than the LocationPositionsSection size.
+  // It could happen when there was no available FileLineColLoc.
+  // Returns a default empty location.
   if (location_position_offset >= location_positions_section_.size())
     return result;
 

@@ -15,66 +15,23 @@
 // Thin wrapper around the MIOpen API adding llvm::Error.
 #include "tfrt/gpu/wrapper/miopen_wrapper.h"
 
-#include <cstddef>
-#include <cstdlib>
-#include <cstring>
-
-#include "llvm/Support/Errc.h"
-#include "llvm/Support/Error.h"
-#include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/raw_ostream.h"
 #include "wrapper_detail.h"
 
 namespace tfrt {
 namespace gpu {
 namespace wrapper {
 
-template void internal::LogResult(llvm::raw_ostream&, miopenStatus_t);
+template llvm::raw_ostream& internal::operator<<(
+    llvm::raw_ostream&, const ErrorData<miopenStatus_t>&);
 
-llvm::raw_ostream& operator<<(llvm::raw_ostream& os, miopenStatus_t status) {
-  switch (status) {
-    case miopenStatusSuccess:
-      return os << "miopenStatusSuccess";
-    case miopenStatusNotInitialized:
-      return os << "miopenStatusNotInitialized";
-    case miopenStatusInvalidValue:
-      return os << "miopenStatusInvalidValue";
-    case miopenStatusBadParm:
-      return os << "miopenStatusBadParm";
-    case miopenStatusAllocFailed:
-      return os << "miopenStatusAllocFailed";
-    case miopenStatusInternalError:
-      return os << "miopenStatusInternalError";
-    case miopenStatusNotImplemented:
-      return os << "miopenStatusNotImplemented";
-    case miopenStatusUnknownError:
-      return os << "miopenStatusUnknownError";
-    case miopenStatusUnsupportedOp:
-      return os << "miopenStatusUnsupportedOp";
-    default:
-      return os << llvm::formatv("miopenStatus_t({0})",
-                                 static_cast<int>(status));
-  }
-}
-
-llvm::raw_ostream& operator<<(llvm::raw_ostream& os, miopenDataType_t dtype) {
-  switch (dtype) {
-    case miopenHalf:
-      return os << "miopenHalf";
-    case miopenFloat:
-      return os << "miopenFloat";
-    case miopenInt32:
-      return os << "miopenInt32";
-    case miopenInt8:
-      return os << "miopenInt8";
-    case miopenInt8x4:
-      return os << "miopenInt8x4";
-    case miopenBFloat16:
-      return os << "miopenBFloat16";
-    default:
-      return os << llvm::formatv("miopenDataType_t({0})",
-                                 static_cast<int>(dtype));
-  }
+Expected<miopenDataType_t> ParseMiopenDataType(llvm::StringRef name) {
+  if (name == "miopenHalf") return miopenHalf;
+  if (name == "miopenFloat") return miopenFloat;
+  if (name == "miopenInt32") return miopenInt32;
+  if (name == "miopenInt8") return miopenInt8;
+  if (name == "miopenInt8x4") return miopenInt8x4;
+  if (name == "miopenBFloat16") return miopenBFloat16;
+  return MakeStringError("Unknown miopenDataType_t: ", name);
 }
 
 llvm::Expected<LibraryVersion> MiopenGetVersion() {
@@ -120,9 +77,7 @@ llvm::Error MiopenSetTensorDescriptor(miopenTensorDescriptor_t descriptor,
                                       llvm::ArrayRef<int> dimensions,
                                       llvm::ArrayRef<int> strides) {
   if (dimensions.size() != strides.size()) {
-    return llvm::createStringError(
-        llvm::errc::invalid_argument,
-        "Expected dimensions and strides to be equal size");
+    return MakeStringError("Expected dimensions and strides to be equal size");
   }
   return TO_ERROR(miopenSetTensorDescriptor(
       descriptor, data_type, dimensions.size(),
@@ -172,8 +127,7 @@ llvm::Error MiopenInitConvolutionDescriptor(
     llvm::ArrayRef<int> filter_stride, llvm::ArrayRef<int> dilation,
     miopenConvolutionMode_t mode) {
   if (pad.size() != filter_stride.size() || pad.size() != dilation.size()) {
-    return llvm::createStringError(
-        llvm::errc::invalid_argument,
+    return MakeStringError(
         "Expected paddings, filter_strides and dilations arrays of equal size");
   }
   return TO_ERROR(miopenInitConvolutionNdDescriptor(
@@ -358,8 +312,7 @@ llvm::Error MiopenSetPoolingDescriptor(miopenPoolingDescriptor_t descriptor,
                                        llvm::ArrayRef<int> strides) {
   if (window_dimensions.size() != paddings.size() ||
       paddings.size() != strides.size()) {
-    return llvm::createStringError(
-        llvm::errc::invalid_argument,
+    return MakeStringError(
         "Expected window dimension, padding, and stride arrays of equal size");
   }
   return TO_ERROR(miopenSetNdPoolingDescriptor(

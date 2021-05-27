@@ -15,10 +15,8 @@
 // Thin abstraction layer for CUDA and HIP driver API.
 #include "tfrt/gpu/wrapper/driver_wrapper.h"
 
-#include "llvm/Support/Errc.h"
-#include "llvm/Support/Error.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/raw_ostream.h"
 #include "tfrt/gpu/wrapper/cuda_wrapper.h"
 #include "tfrt/gpu/wrapper/hip_wrapper.h"
 #include "tfrt/support/logging.h"
@@ -121,8 +119,16 @@ llvm::raw_ostream& operator<<(llvm::raw_ostream& os, Platform platform) {
     case Platform::ROCm:
       return os << "ROCm";
     default:
-      return os << "INVALID";
+      return os << llvm::formatv("Platform({0})", static_cast<int>(platform));
   }
+}
+
+template <>
+Expected<wrapper::Platform> Parse<wrapper::Platform>(llvm::StringRef platform) {
+  if (platform == "NONE") return wrapper::Platform::NONE;
+  if (platform == "CUDA") return wrapper::Platform::CUDA;
+  if (platform == "ROCm") return wrapper::Platform::ROCm;
+  return MakeStringError("Invalid platform: ", platform);
 }
 
 llvm::raw_ostream& operator<<(llvm::raw_ostream& os, CurrentContext current) {
@@ -1163,8 +1169,7 @@ thread_local ContextTls kContextTls;
 llvm::Error CheckNoCurrentContext() {
 #ifndef NDEBUG
   if (kContextTls.ref_count != 0) {
-    return llvm::createStringError(
-        llvm::errc::operation_not_permitted,
+    return MakeStringError(
         "Existing CurrentContext instance(s) in same thread.");
   }
 #endif
@@ -1189,10 +1194,8 @@ void DieIfError(llvm::Error&& error) {
 
 llvm::Error CheckPlatform(Platform platform, Platform expected) {
   if (platform != expected) {
-    return llvm::createStringError(
-        llvm::errc::invalid_argument,
-        llvm::formatv("Expected platform to be {0}, but got {1}", expected,
-                      platform));
+    return MakeStringError(llvm::formatv(
+        "Expected platform to be {0}, but got {1}", expected, platform));
   }
   return llvm::Error::success();
 }
@@ -1209,6 +1212,78 @@ llvm::Error InvalidPlatform(Platform platform) {
 
 llvm::Error UnsupportedPlatform(Platform platform) {
   return CreatePlatformError("Unsupported", platform);
+}
+
+llvm::Error MakeOomError(CurrentContext current, size_t size_bytes) {
+  std::string message;
+  llvm::raw_string_ostream oss(message);
+  oss << "Out of memory trying to allocate "
+      << HumanReadableNumBytes(size_bytes);
+  if (auto mem_info = wrapper::MemGetInfo(current)) {
+    oss << " (" << HumanReadableNumBytes(mem_info->free_bytes) << " of "
+        << HumanReadableNumBytes(mem_info->total_bytes) << " available)";
+  }
+  if (auto device = wrapper::CtxGetDevice(current))
+    oss << " on GPU " << *device;
+  oss << ".";
+  return MakeStringError(std::move(oss.str()));
+}
+
+llvm::raw_ostream& operator<<(llvm::raw_ostream& os, ResourceType type) {
+  switch (type) {
+    case ResourceType::kStream:
+      return os << "stream";
+    case ResourceType::kEvent:
+      return os << "event";
+    case ResourceType::kModule:
+      return os << "module";
+    case ResourceType::kDeviceMemory:
+      return os << "device memory";
+    case ResourceType::kHostMemory:
+      return os << "host memory";
+    case ResourceType::kRegisteredMemory:
+      return os << "registered memory";
+    default:
+      return os << llvm::formatv("ResourceType({0})", static_cast<int>(type));
+  }
+}
+
+ResourceMap::ResourceMap(Map* map, std::mutex* mutex)
+    : map_(map), lock_(*mutex) {}
+
+ResourceMap ResourceMap::Get() {
+  static std::pair<Map*, std::mutex*> pair = {new Map, new std::mutex};
+  return {pair.first, pair.second};
+}
+
+void ResourceMap::NotifyCreated(ResourceType type, void* resource) {
+  auto context = CreateCurrentContext().context();
+  if (!map_->emplace(resource, std::make_pair(type, context)).second)
+    TFRT_LOG(FATAL) << StrCat("Resource ", resource, " already registered");
+}
+
+void ResourceMap::NotifyDestroyed(void* resource) {
+  if (!map_->erase(resource))
+    TFRT_LOG(FATAL) << StrCat("Resource ", resource, " not registered");
+}
+
+llvm::Error ResourceMap::CheckNoneDangling(Context context) {
+  std::vector<Map::iterator> iters;
+  for (auto it = map_->begin(); it != map_->end(); ++it) {
+    if (std::get<Context>(it->second) == context) {
+      iters.push_back(it);
+    }
+  }
+  if (iters.empty()) return llvm::Error::success();
+
+  std::string message =
+      StrCat("Context ", context, " has dangling resources: ");
+  for (auto it : iters) {
+    llvm::raw_string_ostream(message)
+        << it->first << " (" << std::get<ResourceType>(it->second) << "), ";
+    map_->erase(it);
+  }
+  return MakeStringError(llvm::StringRef(message).drop_back(2));
 }
 
 }  // namespace wrapper

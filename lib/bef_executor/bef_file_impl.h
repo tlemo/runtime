@@ -234,11 +234,11 @@ class BEFFileImpl : public BEFFile, public DebugInfoDecoder {
   struct RegisterInfo {
     // This is the number of uses of the register in the program.  The value
     // may be deallocated when this number of uses are complete.
-    const unsigned user_count;
+    unsigned user_count = 0;
     // 'value' is not used by BEFFileImpl. BEFExecutor takes ownership of
     // RegisterInfo, and uses 'value' to track the register's contents as it
     // executes a function.
-    std::atomic<AsyncValue*> value{nullptr};
+    AsyncValue* value = nullptr;
 
     explicit RegisterInfo(unsigned user_count) : user_count(user_count) {}
   };
@@ -312,14 +312,14 @@ class BEFFileImpl : public BEFFile, public DebugInfoDecoder {
 
   AsyncKernelImplementation GetAsyncKernel(uint32_t kernel_code) const {
     assert(kernel_code < kernels_.size());
-    KernelImplementation kernel_impl = kernels_[kernel_code];
+    const KernelImplementation& kernel_impl = kernels_[kernel_code];
     assert(kernel_impl.is<AsyncKernelImplementation>());
     return kernel_impl.get<AsyncKernelImplementation>();
   }
 
   SyncKernelImplementation GetSyncKernel(uint32_t kernel_code) const {
     assert(kernel_code < kernels_.size());
-    KernelImplementation kernel_impl = kernels_[kernel_code];
+    const KernelImplementation& kernel_impl = kernels_[kernel_code];
     assert(kernel_impl.is<SyncKernelImplementation>());
     return kernel_impl.get<SyncKernelImplementation>();
   }

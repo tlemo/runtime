@@ -17,6 +17,8 @@
 
 #include "tfrt/gpu/wrapper/blas_wrapper.h"
 #include "tfrt/gpu/wrapper/dnn_wrapper.h"
+#include "tfrt/gpu/wrapper/driver_wrapper.h"
+#include "tfrt/host_context/host_context.h"
 #include "tfrt/support/error_util.h"
 #include "tfrt/support/ref_count.h"
 
@@ -26,6 +28,11 @@ GpuContext::GpuContext(wrapper::OwningContext context)
     : context_(std::move(context)) {}
 
 GpuContext::~GpuContext() = default;
+
+wrapper::Context GpuContext::release() {
+  modules_.clear();           // Clear modules map.
+  return context_.release();  // Release OwningContext.
+}
 
 // Wrapper for module loading that prints logs when in debug mode.
 static llvm::Expected<wrapper::OwningModule> LoadModule(
@@ -48,33 +55,27 @@ static llvm::Expected<wrapper::OwningModule> LoadModule(
 #endif
 }
 
-Expected<GpuFunction> GpuContext::GetFunction(uint64_t key, string_view data,
-                                              string_view name) {
-  auto it = functions_.find(key);
-  if (it != functions_.end()) {
-    // Returned cached function.
-    return std::get<GpuFunction>(it->second);
+Expected<wrapper::Module> GpuContext::LoadModule(uint64_t key,
+                                                 string_view data) {
+  auto it = modules_.find(key);
+  if (it != modules_.end()) {
+    // Returned cached module.
+    return it->second.get();
   }
 
   if (data.empty() || data.back() != 0)
     return MakeStringError("data attribute must be null-terminated");
-  if (name.empty() || name.back() != 0)
-    return MakeStringError("name attribute must be null-terminated");
 
   auto current = wrapper::CtxSetCurrent(context_.get());
   if (!current) return current.takeError();
 
-  auto module = LoadModule(*current, data);
+  auto module = gpu::LoadModule(*current, data);
   if (!module) return module.takeError();
 
-  auto function = wrapper::ModuleGetFunction(module->get(), name.data());
-  if (!function) return function.takeError();
-
-  auto pair = functions_.try_emplace(
-      key, std::make_pair(std::move(*module), *function));
+  auto pair = modules_.try_emplace(key, std::move(*module));
   assert(pair.second && "failed to insert into map");
 
-  return std::get<GpuFunction>(pair.first->second);
+  return pair.first->second.get();
 }
 
 GpuStream::GpuStream(AsyncValueRef<GpuContext> context,
@@ -83,18 +84,40 @@ GpuStream::GpuStream(AsyncValueRef<GpuContext> context,
 
 GpuStream::~GpuStream() = default;
 
+wrapper::Stream GpuStream::release() {
+  return stream_.release();  // Release OwningStream.
+}
+
+BorrowedGpuStream::BorrowedGpuStream(wrapper::Context context,
+                                     wrapper::Stream stream)
+    : context_(MakeAvailableAsyncValueRef<GpuContext>(
+          wrapper::OwningContext(context))),
+      stream_(MakeAvailableAsyncValueRef<GpuStream>(
+          context_.CopyRef(), wrapper::OwningStream(stream))) {}
+
+BorrowedGpuStream::~BorrowedGpuStream() {
+  stream_->release();   // Release GpuStream's OwningStream.
+  context_->release();  // Release GpuContext's OwningContext.
+}
+
 GpuEvent::GpuEvent(AsyncValueRef<GpuContext> context,
                    wrapper::OwningEvent event)
     : context_(std::move(context)), event_(std::move(event)) {}
 
 GpuEvent::~GpuEvent() = default;
 
-GpuAllocator::GpuAllocator(AsyncValueRef<GpuContext> context)
+GpuModule::GpuModule(AsyncValueRef<GpuContext> context, wrapper::Module module)
+    : context_(std::move(context)), module_(std::move(module)) {}
+
+GpuModule::~GpuModule() = default;
+
+GpuDefaultAllocator::GpuDefaultAllocator(AsyncValueRef<GpuContext> context)
     : context_(std::move(context)) {}
 
-GpuAllocator::~GpuAllocator() = default;
+GpuDefaultAllocator::~GpuDefaultAllocator() = default;
 
-Expected<GpuPointer> GpuAllocator::Allocate(size_t size, wrapper::Stream) {
+Expected<GpuPointer> GpuDefaultAllocator::Allocate(size_t size,
+                                                   wrapper::Stream) {
   auto current = wrapper::CtxSetCurrent(context_->get());
   if (!current) return current.takeError();
   auto memory = wrapper::MemAlloc(*current, size);
@@ -102,8 +125,40 @@ Expected<GpuPointer> GpuAllocator::Allocate(size_t size, wrapper::Stream) {
   return memory->release();
 }
 
-Error GpuAllocator::Deallocate(GpuPointer pointer, wrapper::Stream) {
+Error GpuDefaultAllocator::Deallocate(GpuPointer pointer, wrapper::Stream) {
   return wrapper::MemFree(pointer);
+}
+
+GpuOneShotAllocator<void>::GpuOneShotAllocator(GpuPointer pointer)
+    : pointer_(pointer) {}
+
+GpuOneShotAllocator<void>::GpuOneShotAllocator(GpuOneShotAllocator&& other)
+    : pointer_(other.pointer_) {
+  other.pointer_ = nullptr;
+}
+
+GpuOneShotAllocator<void>& GpuOneShotAllocator<void>::operator=(
+    GpuOneShotAllocator&& other) {
+  pointer_ = other.pointer_;
+  other.pointer_ = nullptr;
+  return *this;
+}
+
+Expected<GpuPointer> GpuOneShotAllocator<void>::Allocate(
+    size_t size, wrapper::Stream stream) {
+  if (!pointer_) {
+    return MakeStringError(
+        "Trying to allocate from GpuOneShotAllocator with null pointer.");
+  }
+  GpuPointer result = pointer_;
+  pointer_ = nullptr;
+  return result;
+}
+
+Error GpuOneShotAllocator<void>::Deallocate(GpuPointer pointer,
+                                            wrapper::Stream stream) {
+  pointer_ = pointer;
+  return Error::success();
 }
 
 GpuBuffer::GpuBuffer(AsyncValueRef<GpuAllocator> allocator, GpuPointer pointer,

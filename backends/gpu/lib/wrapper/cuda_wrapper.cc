@@ -15,17 +15,15 @@
 // Thin wrapper around the CUDA API adding llvm::Error and explicit context.
 #include "tfrt/gpu/wrapper/cuda_wrapper.h"
 
-#include "llvm/Support/Errc.h"
-#include "llvm/Support/Error.h"
 #include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/raw_ostream.h"
 #include "wrapper_detail.h"
 
 namespace tfrt {
 namespace gpu {
 namespace wrapper {
 
-template void internal::LogResult(llvm::raw_ostream&, CUresult);
+template llvm::raw_ostream& internal::operator<<(llvm::raw_ostream&,
+                                                 const ErrorData<CUresult>&);
 
 llvm::raw_ostream& operator<<(llvm::raw_ostream& os, CUresult result) {
   const char* name = nullptr;
@@ -116,6 +114,16 @@ llvm::Error CuDevicePrimaryCtxRelease(Device device) {
   // Releasing the primary context does not change the current context, but
   // decrements the internal reference count and deactivates it iff zero.
   kContextTls.cuda_may_skip_set_ctx = false;
+#ifndef NDEBUG
+  auto state = CuDevicePrimaryCtxGetState(device);
+  if (!state) return state.takeError();
+  if (!state->active) {
+    auto context = CuDevicePrimaryCtxRetain(device);
+    if (!context) return context.takeError();
+    RETURN_IF_ERROR(cuDevicePrimaryCtxRelease(ToCuda(device)));
+    return CheckNoDanglingResources(context->release());
+  }
+#endif
   return llvm::Error::success();
 }
 
@@ -128,7 +136,15 @@ llvm::Error CuDevicePrimaryCtxReset(Device device) {
       if (kContextTls.cuda_ctx == context) return has_instance;
     }
   }
-  return TO_ERROR(cuDevicePrimaryCtxReset(ToCuda(device)));
+  Context context;
+#ifndef NDEBUG
+  auto context_or = CuDevicePrimaryCtxRetain(device);
+  if (!context_or) return context_or.takeError();
+  context = context_or->release();
+  RETURN_IF_ERROR(cuDevicePrimaryCtxRelease(ToCuda(device)));
+#endif
+  RETURN_IF_ERROR(cuDevicePrimaryCtxReset(ToCuda(device)));
+  return CheckNoDanglingResources(context);
 }
 
 llvm::Expected<ContextState> CuDevicePrimaryCtxGetState(Device device) {
@@ -166,7 +182,7 @@ llvm::Error CuCtxDestroy(CUcontext context) {
     RETURN_IF_ERROR(cuCtxGetCurrent(&kContextTls.cuda_ctx));
     kContextTls.cuda_may_skip_set_ctx = false;
   }
-  return llvm::Error::success();
+  return CheckNoDanglingResources(context);
 }
 
 llvm::Expected<CurrentContext> CuCtxGetCurrent() {
@@ -287,6 +303,7 @@ llvm::Expected<OwningStream> CuStreamCreate(CurrentContext current,
   CheckCudaContext(current);
   CUstream stream;
   RETURN_IF_ERROR(cuStreamCreate(&stream, flags));
+  NotifyResourceCreated(ResourceType::kStream, stream);
   return OwningStream(stream);
 }
 
@@ -296,12 +313,15 @@ llvm::Expected<OwningStream> CuStreamCreate(CurrentContext current,
   CheckCudaContext(current);
   CUstream stream;
   RETURN_IF_ERROR(cuStreamCreateWithPriority(&stream, flags, priority));
+  NotifyResourceCreated(ResourceType::kStream, stream);
   return OwningStream(stream);
 }
 
 llvm::Error CuStreamDestroy(CUstream stream) {
   if (stream == nullptr) return llvm::Error::success();
-  return TO_ERROR(cuStreamDestroy(stream));
+  RETURN_IF_ERROR(cuStreamDestroy(stream));
+  NotifyResourceDestroyed(stream);
+  return llvm::Error::success();
 }
 
 llvm::Expected<Context> CuStreamGetCtx(CUstream stream) {
@@ -344,12 +364,15 @@ llvm::Expected<OwningEvent> CuEventCreate(CurrentContext current,
   CheckCudaContext(current);
   CUevent event;
   RETURN_IF_ERROR(cuEventCreate(&event, flags));
+  NotifyResourceCreated(ResourceType::kEvent, event);
   return OwningEvent(event);
 }
 
 llvm::Error CuEventDestroy(CUevent event) {
   if (event == nullptr) return llvm::Error::success();
-  return TO_ERROR(cuEventDestroy(event));
+  RETURN_IF_ERROR(cuEventDestroy(event));
+  NotifyResourceDestroyed(event);
+  return llvm::Error::success();
 }
 
 llvm::Error CuEventRecord(CUevent event, CUstream stream) {
@@ -378,13 +401,24 @@ llvm::Expected<float> CuEventElapsedTime(CUevent start, CUevent end) {
 llvm::Expected<DeviceMemory<void>> CuMemAlloc(CurrentContext current,
                                               size_t size_bytes) {
   CheckCudaContext(current);
-  CUdeviceptr ptr;
-  RETURN_IF_ERROR(cuMemAlloc(&ptr, size_bytes));
-  return DeviceMemory<void>({reinterpret_cast<void*>(ptr), Platform::CUDA});
+  void* ptr;
+  if (auto error = TO_ERROR(
+          cuMemAlloc(reinterpret_cast<CUdeviceptr*>(&ptr), size_bytes))) {
+    return llvm::handleErrors(
+        std::move(error), [&](std::unique_ptr<ErrorInfo<CUresult>> info) {
+          return GetResult(*info) == CUDA_ERROR_OUT_OF_MEMORY
+                     ? MakeOomError(current, size_bytes)
+                     : llvm::Error(std::move(info));
+        });
+  }
+  NotifyResourceCreated(ResourceType::kDeviceMemory, ptr);
+  return DeviceMemory<void>({ptr, Platform::CUDA});
 }
 
 llvm::Error CuMemFree(Pointer<void> pointer) {
-  return TO_ERROR(cuMemFree(ToDevicePtr(pointer)));
+  RETURN_IF_ERROR(cuMemFree(ToDevicePtr(pointer)));
+  NotifyResourceDestroyed(ToCuda(pointer));
+  return llvm::Error::success();
 }
 
 llvm::Expected<HostMemory<void>> CuMemHostAlloc(CurrentContext current,
@@ -393,11 +427,14 @@ llvm::Expected<HostMemory<void>> CuMemHostAlloc(CurrentContext current,
   CheckCudaContext(current);
   void* ptr;
   RETURN_IF_ERROR(cuMemHostAlloc(&ptr, size_bytes, flags));
+  NotifyResourceCreated(ResourceType::kHostMemory, ptr);
   return HostMemory<void>({ptr, Platform::CUDA});
 }
 
 llvm::Error CuMemHostFree(Pointer<void> pointer) {
-  return TO_ERROR(cuMemFreeHost(pointer.raw(Platform::CUDA)));
+  RETURN_IF_ERROR(cuMemFreeHost(pointer.raw(Platform::CUDA)));
+  NotifyResourceDestroyed(ToCuda(pointer));
+  return llvm::Error::success();
 }
 
 llvm::Expected<RegisteredMemory<void>> CuMemHostRegister(
@@ -405,20 +442,25 @@ llvm::Expected<RegisteredMemory<void>> CuMemHostRegister(
     CUmemhostregister_flags flags) {
   CheckCudaContext(current);
   RETURN_IF_ERROR(cuMemHostRegister(ptr, size_bytes, flags));
+  NotifyResourceCreated(ResourceType::kRegisteredMemory, ptr);
   return RegisteredMemory<void>({ptr, Platform::CUDA});
 }
 
 llvm::Error CuMemHostUnregister(Pointer<void> pointer) {
-  return TO_ERROR(cuMemHostUnregister(pointer.raw(Platform::CUDA)));
+  RETURN_IF_ERROR(cuMemHostUnregister(pointer.raw(Platform::CUDA)));
+  NotifyResourceDestroyed(ToCuda(pointer));
+  return llvm::Error::success();
 }
 
 llvm::Expected<DeviceMemory<void>> CuMemAllocManaged(CurrentContext current,
                                                      size_t size_bytes,
                                                      CUmemAttach_flags flags) {
   CheckCudaContext(current);
-  CUdeviceptr ptr;
-  RETURN_IF_ERROR(cuMemAllocManaged(&ptr, size_bytes, flags));
-  return DeviceMemory<void>({reinterpret_cast<void*>(ptr), Platform::CUDA});
+  void* ptr;
+  RETURN_IF_ERROR(cuMemAllocManaged(reinterpret_cast<CUdeviceptr*>(&ptr),
+                                    size_bytes, flags));
+  NotifyResourceCreated(ResourceType::kDeviceMemory, ptr);
+  return DeviceMemory<void>({ptr, Platform::CUDA});
 }
 
 llvm::Expected<Pointer<void>> CuMemHostGetDevicePointer(
@@ -465,8 +507,7 @@ llvm::Error CuMemRangeGetAttributes(
     llvm::ArrayRef<CUmem_range_attribute> attributes, Pointer<const void> ptr,
     size_t size_bytes) {
   if (data.size() != data_sizes.size() || data.size() != attributes.size()) {
-    return llvm::createStringError(llvm::errc::invalid_argument,
-                                   "Mismatching array sizes");
+    return MakeStringError("Mismatching array sizes");
   }
   return TO_ERROR(cuMemRangeGetAttributes(
       const_cast<void**>(data.data()), const_cast<size_t*>(data_sizes.data()),
@@ -483,8 +524,7 @@ llvm::Error CuPointerGetAttributes(
     llvm::ArrayRef<void*> data, llvm::ArrayRef<CUpointer_attribute> attributes,
     Pointer<const void> ptr) {
   if (data.size() != attributes.size()) {
-    return llvm::createStringError(llvm::errc::invalid_argument,
-                                   "Mismatching array sizes");
+    return MakeStringError("Mismatching array sizes");
   }
   return TO_ERROR(cuPointerGetAttributes(
       data.size(), const_cast<CUpointer_attribute*>(attributes.data()),
@@ -564,14 +604,14 @@ llvm::Expected<OwningModule> CuModuleLoadDataEx(
     llvm::ArrayRef<void*> jit_option_values) {
   CheckCudaContext(current);
   if (jit_options.size() != jit_option_values.size()) {
-    return llvm::createStringError(llvm::errc::invalid_argument,
-                                   "Mismatching array sizes");
+    return MakeStringError("Mismatching array sizes");
   }
   CUmodule module;
   RETURN_IF_ERROR(
       cuModuleLoadDataEx(&module, image, jit_options.size(),
                          const_cast<CUjit_option*>(jit_options.data()),
                          const_cast<void**>(jit_option_values.data())));
+  NotifyResourceCreated(ResourceType::kModule, module);
   return OwningModule(module);
 }
 
@@ -580,12 +620,15 @@ llvm::Expected<OwningModule> CuModuleLoadData(CurrentContext current,
   CheckCudaContext(current);
   CUmodule module;
   RETURN_IF_ERROR(cuModuleLoadData(&module, image));
+  NotifyResourceCreated(ResourceType::kModule, module);
   return OwningModule(module);
 }
 
 llvm::Error CuModuleUnload(CUmodule module) {
   if (module == nullptr) return llvm::Error::success();
-  return TO_ERROR(cuModuleUnload(module));
+  RETURN_IF_ERROR(cuModuleUnload(module));
+  NotifyResourceDestroyed(module);
+  return llvm::Error::success();
 }
 
 llvm::Expected<Function> CuModuleGetFunction(CUmodule module,

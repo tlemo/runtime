@@ -70,6 +70,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "tfrt/cpu/jit/async_runtime.h"
 #include "tfrt/cpu/jit/async_runtime_api.h"
+#include "tfrt/cpu/jit/cpurt_support.h"
 #include "tfrt/host_context/async_value_ref.h"
 #include "tfrt/host_context/host_buffer.h"
 #include "tfrt/support/error_util.h"
@@ -193,11 +194,37 @@ Expected<ResultsMemoryLayout> Executable::VerifyEntrypointSignature(
 // Converting from runtime buffers (aka Tensors) to Memref descriptors.
 // -------------------------------------------------------------------------- //
 
+static Error VerifyDType(mlir::Type input_type, DType operand_type) {
+  assert(operand_type.kind() != DType::Invalid && "invalid operand type");
+
+  auto verify = [&](DType::Kind expected_input_type) -> Error {
+    if (operand_type.kind() != expected_input_type)
+      return MakeStringError("operand type does not match input type: ",
+                             operand_type, " vs ", DType(expected_input_type));
+    return Error::success();
+  };
+
+  // TODO(ezhulenev): Implement type dispatching to connect MLIR with TFRT.
+  if (input_type.isF32()) return verify(DType::F32);
+  if (input_type.isInteger(32)) return verify(DType::I32);
+  if (input_type.isInteger(64)) return verify(DType::I64);
+
+  return MakeStringError("unexpected input type: ", input_type);
+}
+
 static Error VerifyMemrefOperand(mlir::ShapedType type, MemrefDesc memref) {
+  // Check that memref data type matches operand element type.
+  if (auto err = VerifyDType(type.getElementType(), memref.dtype)) return err;
+
+  // For unranked operands we only verify the element type.
+  if (!type.hasRank()) return Error::success();
+
+  // Check that memref rank is the same as operand rank.
   if (memref.sizes.size() != type.getRank())
     return MakeStringError("operand rank does not match expected input rank: ",
                            memref.sizes.size(), " vs ", type.getRank());
 
+  // Check that all statically known dimensions matches the memref dimensions.
   for (unsigned d = 0; d < memref.sizes.size(); ++d) {
     ssize_t operand_dim = memref.sizes[d];
     ssize_t expected_dim = type.getDimSize(d);
@@ -207,7 +234,6 @@ static Error VerifyMemrefOperand(mlir::ShapedType type, MemrefDesc memref) {
                              operand_dim, " vs ", expected_dim);
   }
 
-  // TODO(ezhulenev): Verify operand element type.
   return Error::success();
 }
 
@@ -219,9 +245,14 @@ Error VerifyMemrefOperand(mlir::RankedTensorType type, MemrefDesc memref) {
   return VerifyMemrefOperand(type.cast<mlir::ShapedType>(), memref);
 }
 
+Error VerifyMemrefOperand(mlir::UnrankedTensorType type, MemrefDesc memref) {
+  return VerifyMemrefOperand(type.cast<mlir::ShapedType>(), memref);
+}
+
 Expected<MemrefDesc> ConvertTensorToMemrefDesc(const Tensor& tensor) {
   if (auto* dht = dyn_cast<DenseHostTensor>(&tensor)) {
     MemrefDesc memref;
+    memref.dtype = dht->dtype();
     memref.data = const_cast<void*>(dht->data());
     memref.offset = 0;
     dht->shape().GetDimensions(&memref.sizes);
@@ -230,6 +261,35 @@ Expected<MemrefDesc> ConvertTensorToMemrefDesc(const Tensor& tensor) {
   }
 
   return MakeStringError("unsupported tensor type: ", tensor.tensor_type());
+}
+
+// Gets (copies) the values from `desc`, returning them in a DenseElementsAttr.
+// If it cannot extract the values, returns an empty attribute.
+static mlir::DenseElementsAttr GetMemrefValues(
+    mlir::Builder* builder, const mlir::ShapedType& shaped_type,
+    const MemrefDesc& desc) {
+  size_t rank = desc.sizes.size();
+  if (rank != 0 && rank != 1) return {};
+
+  llvm::SmallVector<mlir::Attribute> attributes;
+  size_t num_values = rank == 0 ? 1 : desc.sizes[0];
+  switch (desc.dtype.kind()) {
+    case DType::I32: {
+      const auto* data = static_cast<TypeForDTypeKind<DType::I32>*>(desc.data);
+      for (int i = 0; i < num_values; ++i) {
+        attributes.push_back(builder->getI32IntegerAttr(data[i]));
+      }
+    } break;
+    case DType::I64: {
+      const auto* data = static_cast<TypeForDTypeKind<DType::I64>*>(desc.data);
+      for (int i = 0; i < num_values; ++i) {
+        attributes.push_back(builder->getI64IntegerAttr(data[i]));
+      }
+    } break;
+    default:
+      return {};
+  }
+  return mlir::DenseElementsAttr::get(shaped_type, attributes);
 }
 
 // -------------------------------------------------------------------------- //
@@ -262,6 +322,10 @@ static void AddMemrefArgument(const MemrefDesc& memref,
 
 Error Executable::InitializeCallFrame(ArrayRef<MemrefDesc> operands,
                                       CallFrame* call_frame) const {
+  // TODO(ezhulenev): If executable is specialized for operands shapes then
+  // there is no need to verify them once more here. However currently we rely
+  // on a hash code to look up specializations, and this can lead to collisions.
+
   // Make sure that we call the kernel with the correct number of operands.
   if (operands.size() != signature_.getNumInputs())
     return MakeStringError(
@@ -295,39 +359,70 @@ Error Executable::InitializeCallFrame(ArrayRef<MemrefDesc> operands,
 // Executable return values unpacking.
 // -------------------------------------------------------------------------- //
 
+ReturnValueConverterBase::ReturnValueConverterBase(RemainingResults results)
+    : results_(results) {}
+
+ReturnValueConverterBase::~ReturnValueConverterBase() {}
+
+void ReturnValueConverterBase::EmitErrors(
+    RCReference<ErrorAsyncValue>& error) const {
+  for (size_t i = 0; i < results_.size(); ++i) results_[i] = error.CopyRef();
+}
+
+namespace {
+// Do not record any operands information for results conversion.
+struct ConversionCtx {};
+
+template <typename T, int rank>
+static ArrayRef<int64_t> Sizes(StridedMemRefType<T, rank>* memref) {
+  return llvm::makeArrayRef(memref->sizes);
+}
+
+template <typename T>
+static ArrayRef<int64_t> Sizes(StridedMemRefType<T, 0>* memref) {
+  return {};
+}
+
+// The returned memref can point into statically allocated memory that we can't
+// pass to `free` (memref.global). The LLVM lowering of `memref.global` sets the
+// allocated pointer to the magic value 0xDEADBEEF.
+template <typename T, int rank>
+static bool IsStaticStorageDuration(StridedMemRefType<T, rank>* memref) {
+  return reinterpret_cast<std::intptr_t>(memref->basePtr) == 0xDEADBEEF;
+}
+
 // Converts StridedMemref to the DenseHostTensor. This struct satisfies
 // ReturnStridedMemref's concept (see cpurt.h).
 //
-// TODO(ezhulenev): Currently this emplacer transfers ownership of the memref
-// to the DenseHostTensor. This is not correct in general, because memref
-// does not imply ownership, for example it can be one of the forwarded inputs
-// or a global memref that is owned by the compiled kernel.
+// This converter always creates a new DenseHostTensor from the memref, and it
+// must be used only when it is guaranteed that the compiled region can't
+// return global constant memref or forward one of the operands.
 struct ConvertDenseHostTensor {
   using ResultType = DenseHostTensor;
+  using ConversionContext = ConversionCtx;
 
   template <typename T, int rank>
-  static ArrayRef<int64_t> Sizes(StridedMemRefType<T, rank>* memref) {
-    return memref->sizes;
-  }
-
-  template <typename T>
-  static ArrayRef<int64_t> Sizes(StridedMemRefType<T, 0>* memref) {
-    return {};
-  }
-
-  template <typename T, int rank>
-  static DenseHostTensor Convert(void* memref_ptr) {
+  static DenseHostTensor Convert(const ConversionContext& ctx,
+                                 void* memref_ptr) {
     auto* memref = static_cast<StridedMemRefType<T, rank>*>(memref_ptr);
     TFRT_MSAN_MEMORY_IS_INITIALIZED(memref, sizeof(StridedMemRefType<T, rank>));
     TensorMetadata metadata(GetDType<T>(), Sizes(memref));
     TFRT_MSAN_MEMORY_IS_INITIALIZED(memref->data,
                                     metadata.GetHostSizeInBytes());
+
+    // Deallocate memref only if it has dynamic storage duration.
+    void* ptr = IsStaticStorageDuration(memref) ? nullptr : memref->basePtr;
+    HostBuffer::Deallocator deallocator = [ptr](void*, size_t) { free(ptr); };
+
     return DenseHostTensor(
-        metadata, HostBuffer::CreateFromExternal(
-                      memref->data, metadata.GetHostSizeInBytes(),
-                      [ptr = memref->basePtr](void*, size_t) { free(ptr); }));
+        metadata, HostBuffer::CreateFromExternal(memref->data,
+                                                 metadata.GetHostSizeInBytes(),
+                                                 std::move(deallocator)));
   }
 };
+}  // namespace
+
+namespace internal {
 
 mlir::LogicalResult ReturnAsyncToken(RemainingResults results,
                                      unsigned result_index, mlir::Type type,
@@ -346,56 +441,19 @@ mlir::LogicalResult ReturnAsyncMemrefAsDenseHostTensor(RemainingResults results,
                                                        unsigned result_index,
                                                        mlir::Type type,
                                                        void* result_ptr) {
-  return ReturnAsyncStridedMemref<ConvertDenseHostTensor>(results, result_index,
-                                                          type, result_ptr);
+  return ReturnAsyncStridedMemref<ConvertDenseHostTensor>(
+      {}, results, result_index, type, result_ptr);
 }
 
 mlir::LogicalResult ReturnMemrefAsDenseHostTensor(RemainingResults results,
                                                   unsigned result_index,
                                                   mlir::Type type,
                                                   void* result_ptr) {
-  return ReturnStridedMemref<ConvertDenseHostTensor>(results, result_index,
+  return ReturnStridedMemref<ConvertDenseHostTensor>({}, results, result_index,
                                                      type, result_ptr);
 }
 
-ReturnValueConverter::ReturnValueConverter(RemainingResults results)
-    : results_(results) {
-  AddConversion([](RemainingResults results, unsigned result_index,
-                   mlir::Type t, const void*) {
-    results.EmitErrorAt(result_index, StrCat("unsupported return type: ", t));
-    return mlir::failure();
-  });
-}
-
-mlir::LogicalResult ReturnValueConverter::ReturnValue(unsigned result_index,
-                                                      mlir::Type type,
-                                                      void* ret) const {
-  for (auto& convert : llvm::reverse(conversion_callbacks_))
-    if (mlir::succeeded(convert(results_, result_index, type, ret)))
-      return mlir::success();
-  return mlir::failure();
-}
-
-void ReturnValueConverter::EmitErrors(RCReference<ErrorAsyncValue>& error) {
-  for (size_t i = 0; i < results_.size(); ++i) results_[i] = error.CopyRef();
-}
-
-Error Executable::ReturnResults(const ReturnValueConverter& results,
-                                CallFrame* call_frame) const {
-  auto ret_types = signature_.getResults();
-
-  bool converted = llvm::all_of(llvm::enumerate(ret_types), [&](auto tuple) {
-    unsigned i = tuple.index();
-    mlir::Type type = tuple.value();
-    void* ret = &call_frame->results[results_memory_layout_.offsets[i]];
-    return mlir::succeeded(results.ReturnValue(i, type, ret));
-  });
-
-  if (!converted)
-    return MakeStringError("failed to convert all returned values");
-  else
-    return Error::success();
-}
+}  // namespace internal
 
 // -------------------------------------------------------------------------- //
 // Execute compiled function with kernel operands.
@@ -407,7 +465,7 @@ void EmitErrors(RemainingResults results, Error error,
   for (int i = 0; i < results.size(); ++i) results[i] = async_error.CopyRef();
 }
 
-Error EmitErrors(ReturnValueConverter results, Error error,
+Error EmitErrors(const ReturnValueConverterBase& results, Error error,
                  const ExecutionContext& exec_ctx) {
   auto async_error = EmitErrorAsync(exec_ctx, StrCat(error));
   results.EmitErrors(async_error);
@@ -419,7 +477,7 @@ Error EmitErrors(ReturnValueConverter results, Error error,
 // context allocator.
 
 Error Executable::Execute(ArrayRef<MemrefDesc> operands,
-                          const ReturnValueConverter& results,
+                          const ReturnValueConverterBase& results,
                           const ExecutionContext& exec_ctx) const {
   // CallFrame can be allocated on the stack because compiled function will
   // unpack all the arguments it needs, and async regions will not access
@@ -447,6 +505,23 @@ void Executable::Execute(const ExecutionContext& exec_ctx,
 
   // Call the compiled function.
   (*fptr_)(call_frame->args.data());
+}
+
+Error Executable::ReturnResults(const ReturnValueConverterBase& results,
+                                CallFrame* call_frame) const {
+  auto ret_types = signature_.getResults();
+
+  bool converted = llvm::all_of(llvm::enumerate(ret_types), [&](auto tuple) {
+    unsigned i = tuple.index();
+    mlir::Type type = tuple.value();
+    void* ret = &call_frame->results[results_memory_layout_.offsets[i]];
+    return mlir::succeeded(results.ReturnValue(i, type, ret));
+  });
+
+  if (!converted)
+    return MakeStringError("failed to convert all returned values");
+  else
+    return Error::success();
 }
 
 mlir::FunctionType Executable::signature() const { return signature_; }
@@ -521,7 +596,8 @@ static void SetupPassDebugging(mlir::MLIRContext* context,
     pm.enableIRPrinting([](mlir::Pass*, mlir::Operation*) { return false; },
                         [](mlir::Pass*, mlir::Operation*) { return true; },
                         /*printModuleScope=*/true,
-                        /*printAfterOnlyOnChange=*/false, llvm::errs());
+                        /*printAfterOnlyOnChange=*/false,
+                        /*printAfterOnlyOnFailure=*/false, llvm::errs());
   }
 }
 
@@ -622,10 +698,12 @@ class JitCompilationContext {
   }
 
   // Specialize compiled module to the operands: update all unknown dimensions
-  // with concrete values. Returns error if operands are not compatible with
-  // compiled module entrypoint signature.
-  // TODO(ezhulenev): Support sinking small constants into the function body.
-  llvm::Error Specialize(ArrayRef<MemrefDesc> operands, string_view entrypoint);
+  // with concrete values and sink small constants into the function body.
+  // Returns error if operands are not compatible with compiled module
+  // entrypoint signature.
+  llvm::Error Specialize(ArrayRef<MemrefDesc> operands,
+                         ArrayRef<OperandConstraint> constraints,
+                         string_view entrypoint);
 
   const CompilationOptions& options() const { return opts_; }
 
@@ -745,7 +823,7 @@ JitCompilationContext::Instantiate(const CompilationOptions& opts,
   auto transformer = mlir::makeLLVMPassesTransformer(passes, /*mbOptLevel=*/2,
                                                      target_machine->get());
 
-  // Build MLIR exection engine.
+  // Build MLIR execution engine.
   auto engine = mlir::ExecutionEngine::create(
       ctx->module(), /*llvmModuleBuilder=*/nullptr, transformer,
       ctx->options().jit_code_opt_level, libs);
@@ -772,11 +850,17 @@ static llvm::Expected<mlir::Type> SpecializeType(mlir::Type type,
     return mlir::RankedTensorType::get(operand.sizes, tensor.getElementType());
   }
 
+  if (auto tensor = type.dyn_cast<mlir::UnrankedTensorType>()) {
+    if (auto err = VerifyMemrefOperand(tensor, operand)) return std::move(err);
+    return mlir::RankedTensorType::get(operand.sizes, tensor.getElementType());
+  }
+
   return MakeStringError("Unsupported input type: ", type);
 }
 
-llvm::Error JitCompilationContext::Specialize(ArrayRef<MemrefDesc> operands,
-                                              string_view entrypoint) {
+llvm::Error JitCompilationContext::Specialize(
+    ArrayRef<MemrefDesc> operands, ArrayRef<OperandConstraint> constraints,
+    string_view entrypoint) {
   mlir::FuncOp func = module_->lookupSymbol<mlir::FuncOp>(entrypoint);
   if (!func) return MakeStringError("Entrypoint not found: ", entrypoint);
 
@@ -809,6 +893,24 @@ llvm::Error JitCompilationContext::Specialize(ArrayRef<MemrefDesc> operands,
   std::iota(erase_block_args.begin(), erase_block_args.end(), 0);
   entry_block.eraseArguments(erase_block_args);
 
+  // Sink small constants into the function body.
+  mlir::OpBuilder builder = mlir::OpBuilder::atBlockBegin(&func.front());
+  mlir::Location loc = func.getLoc();
+  for (int i = 0; i < constraints.size(); ++i) {
+    if (constraints[i] != OperandConstraint::kValue) continue;
+    mlir::Type operand_type = func.getType().getInput(i);
+    mlir::ShapedType shaped = operand_type.dyn_cast<mlir::ShapedType>();
+    assert(SupportsValueSpecialization(shaped) &&
+           "Non-sinkable operand was marked for sinking");
+    mlir::DenseElementsAttr shape_attr =
+        GetMemrefValues(&builder, shaped, operands[i]);
+    if (!shape_attr)
+      return MakeStringError("Cannot get values from operand type: ",
+                             operand_type);
+    mlir::Value cst = builder.create<mlir::ConstantOp>(loc, shaped, shape_attr);
+    entry_block.getArgument(i).replaceAllUsesWith(cst);
+  }
+
   return Error::success();
 }
 
@@ -816,25 +918,112 @@ llvm::Error JitCompilationContext::Specialize(ArrayRef<MemrefDesc> operands,
 // JitExecutable implementation.
 //----------------------------------------------------------------------------//
 
-// Returns true if module requires argument specialization to be compiled.
-static Expected<bool> IsSpecializationOnly(mlir::ModuleOp module,
-                                           string_view entrypoint) {
+constexpr const char* const JitExecutable::kConstraint;
+
+static raw_ostream& operator<<(raw_ostream& os,
+                               const OperandConstraint& constraint) {
+  auto str = [](OperandConstraint constraint) -> string_view {
+    switch (constraint) {
+      case OperandConstraint::kResolved:
+        return "resolved";
+      case OperandConstraint::kRank:
+        return "rank";
+      case OperandConstraint::kShape:
+        return "shape";
+      case OperandConstraint::kValue:
+        return "value";
+      default:
+        llvm_unreachable("unknown operand constraint");
+    }
+  };
+
+  os << str(constraint);
+  return os;
+}
+
+static raw_ostream& operator<<(raw_ostream& os,
+                               ArrayRef<OperandConstraint> constraints) {
+  os << "[";
+  llvm::interleaveComma(constraints, os);
+  os << "]";
+  return os;
+}
+
+// Returns kResolved if the constraint can be resolved at compile time.
+// Returns kValue for value specialization if it can be resolved at run time.
+// Returns an error when the constraint cannot be resolved.
+Expected<OperandConstraint> ResolveOperandConstraint(
+    OperandConstraint operand_constraint, mlir::Type operand_type) {
+  // Operand must be a shaped type: memref or tensor.
+  auto shaped = operand_type.dyn_cast<mlir::ShapedType>();
+  if (!shaped)
+    return MakeStringError("unsupported operand type: ", operand_type);
+
+  // Resolve `rank` constraint if rank is known at compile time.
+  if (operand_constraint == OperandConstraint::kRank && shaped.hasRank())
+    return OperandConstraint::kResolved;
+
+  // Resolve `shape` constraint if shape is known at compile time.
+  if (operand_constraint == OperandConstraint::kShape &&
+      shaped.hasStaticShape())
+    return OperandConstraint::kResolved;
+
+  // Leave the `value` constraint unmodified if the operand is sinkable.
+  if (operand_constraint == OperandConstraint::kValue) {
+    if (SupportsValueSpecialization(shaped)) return operand_constraint;
+    return MakeStringError("Cannot sink operand type: ", operand_type);
+  }
+
+  return operand_constraint;
+}
+
+static Expected<OperandConstraint> ParseOperandConstraints(string_view str) {
+  if (str == "rank") return OperandConstraint::kRank;
+  if (str == "shape") return OperandConstraint::kShape;
+  if (str == "value") return OperandConstraint::kValue;
+  return MakeStringError("unknown operand constraint: ", str);
+}
+
+// Returns operands constraints inferred from the entrypoint signature.
+static Expected<llvm::SmallVector<OperandConstraint>> GetOperandsConstraints(
+    mlir::ModuleOp module, string_view entrypoint) {
+  llvm::SmallVector<OperandConstraint> constraints;
+
   auto func = ResolveEntrypointFunction(module, entrypoint);
   if (auto err = func.takeError()) return std::move(err);
 
-  auto is_required = [](mlir::Attribute attr) -> bool {
+  auto parse = [](mlir::Attribute attr) -> Expected<OperandConstraint> {
+    // If attribute is not defined it means that there is no operand constraint.
+    if (!attr) return OperandConstraint::kResolved;
+
+    // Otherwise try to parse constraint from the string attribute.
     auto str = attr.dyn_cast_or_null<mlir::StringAttr>();
-    return str && str.getValue() == "required";
+    if (!str)
+      return MakeStringError("unexpected ", JitExecutable::kConstraint,
+                             " attribute");
+    return ParseOperandConstraints(str.getValue());
   };
 
-  // Check if any of the arguments require shape or value specialization.
   for (int i = 0; i < func->getNumArguments(); ++i) {
-    auto shape = func->getArgAttr(i, JitExecutable::kSpecializeShape);
-    auto value = func->getArgAttr(i, JitExecutable::kSpecializeShape);
-    if (is_required(shape) || is_required(value)) return true;
+    auto operand_type = func->getType().getInput(i);
+
+    auto constraint = parse(func->getArgAttr(i, JitExecutable::kConstraint));
+    if (auto err = constraint.takeError()) return std::move(err);
+
+    auto resolved = ResolveOperandConstraint(*constraint, operand_type);
+    if (auto err = resolved.takeError()) return std::move(err);
+
+    constraints.push_back(*resolved);
   }
 
-  return false;
+  return constraints;
+}
+
+// Returns true if any of the operands have an unresolved constraint.
+static bool IsSpecializationOnly(ArrayRef<OperandConstraint> constraints) {
+  return llvm::any_of(constraints, [](OperandConstraint constraint) {
+    return constraint != OperandConstraint::kResolved;
+  });
 }
 
 /*static*/ Expected<JitExecutable> JitExecutable::Instantiate(
@@ -848,36 +1037,76 @@ static Expected<bool> IsSpecializationOnly(mlir::ModuleOp module,
       JitCompilationContext::Instantiate(compilation_opts, mlir_module);
   if (auto err = ctx.takeError()) return std::move(err);
 
-  // Check if the module requires specialization to be compiled.
-  Expected<bool> required_specialization =
-      IsSpecializationOnly((*ctx)->module(), entrypoint);
-  if (auto err = required_specialization.takeError()) return std::move(err);
+  // Get resolved operands constraints for the entrypoint function.
+  auto constraints = GetOperandsConstraints((*ctx)->module(), entrypoint);
+  if (auto err = constraints.takeError()) return std::move(err);
 
   // If the module must be specialized, return JitExecutable without a default
   // compiled executable.
-  if (*required_specialization)
-    return MakeStringError("specialization not supported");
+  if (IsSpecializationOnly(*constraints)) {
+    // If specialization is explicitly disabled return an error, because we will
+    // never be able to compile an executable.
+    if (compilation_opts.disable_specializations)
+      return MakeStringError(
+          "compilation options disabled specialization, however operands have "
+          "unresolved constraints: ",
+          *constraints);
+
+    return JitExecutable(mlir_module, entrypoint, compilation_opts,
+                         *constraints);
+  }
 
   // Otherwise try to compile the default executable.
   Expected<Executable> executable =
       JitCompilationContext::Compile(std::move(*ctx), entrypoint);
   if (auto err = executable.takeError()) return std::move(err);
 
-  return JitExecutable(mlir_module, entrypoint, compilation_opts,
+  return JitExecutable(mlir_module, entrypoint, compilation_opts, *constraints,
                        std::move(*executable));
 }
 
 JitExecutable::JitExecutable(string_view mlir_module, string_view entrypoint,
                              CompilationOptions compilation_opts,
+                             ArrayRef<OperandConstraint> constraints,
                              Optional<Executable> default_executable)
     : mlir_module_(mlir_module.str()),
       entrypoint_(entrypoint.str()),
       compilation_opts_(std::move(compilation_opts)),
+      constraints_(constraints.begin(), constraints.end()),
       default_executable_(std::move(default_executable)),
       specializations_(std::make_unique<Specializations>()) {}
 
 const Executable* JitExecutable::DefaultExecutable() const {
   return default_executable_.hasValue() ? &*default_executable_ : nullptr;
+}
+
+bool JitExecutable::HasDefaultExecutable() const {
+  return default_executable_.hasValue();
+}
+
+ArrayRef<OperandConstraint> JitExecutable::constraints() const {
+  return constraints_;
+}
+
+// Hashes the given operands.
+// Note: due to value specialization, the resulting hash might depend on the
+// values (and not only on the types) of the operands.
+static llvm::hash_code HashOperands(ArrayRef<MemrefDesc> operands,
+                                    ArrayRef<OperandConstraint> constraints) {
+  llvm::hash_code hash = llvm::hash_value(operands);
+
+  // Mix values of arguments to be sunk into the hash.
+  for (int i = 0; i < constraints.size(); ++i) {
+    if (constraints[i] != OperandConstraint::kValue) continue;
+    const MemrefDesc& operand = operands[i];
+    const auto* data = static_cast<uint8_t*>(operand.data);
+    size_t rank = operand.sizes.size();
+    assert(rank == 0 || rank == 1);
+    size_t num_values = rank == 0 ? 1 : operand.sizes[0];
+    ssize_t len = num_values * operand.dtype.GetHostSize();
+    hash = llvm::hash_combine(hash, llvm::hash_combine_range(data, data + len));
+  }
+  return hash;
 }
 
 // Implement `hash_value` to rely on the ADL lookup for the MemrefDesc type.
@@ -900,13 +1129,18 @@ static llvm::hash_code hash_value(const MemrefDesc& memref) {
 // should only keep N most common specializations, and for everything else
 // fall back on the default executable. However what to do if default executable
 // is not available, and the number of specializations is above N?
+//
+// TODO(ezhulenev): Currently we always specialize operands to the shape, even
+// if operand constraint only requires rank specialization. Although it might be
+// beneficial to know the shape to do broadcasts fusion, consider not doing that
+// when it is not needed.
 Expected<const Executable*> JitExecutable::GetExecutable(
     ArrayRef<MemrefDesc> operands) {
-  llvm::hash_code hash = llvm::hash_value(operands);
+  llvm::hash_code hash = HashOperands(operands, constraints_);
 
   // Do not try to compile specialized executable if it is explicitly disabled.
   if (compilation_opts_.disable_specializations) {
-    if (!default_executable_.hasValue())
+    if (!HasDefaultExecutable())
       return MakeStringError(
           "jit executable specialization is disabled, but the default "
           "executable is not available");
@@ -945,7 +1179,7 @@ Expected<const Executable*> JitExecutable::GetExecutable(
   }
 
   // Specialize executable to the concrete operands.
-  if (auto err = (*ctx)->Specialize(operands, entrypoint_))
+  if (auto err = (*ctx)->Specialize(operands, constraints_, entrypoint_))
     return MakeStringError("Failed to specialize executable: ", err);
 
   // Compile the specialized executable.

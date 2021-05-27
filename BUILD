@@ -3,7 +3,7 @@ load(":build_defs.bzl", "tfrt_cc_library")
 # copybara:uncomment load("//configlang/ncl/build_defs:ncl.bzl", "ncl_test")
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_setting")
-load("@tf_runtime//third_party/mlir:tblgen.bzl", "gentbl")
+load("@tf_runtime//third_party/mlir:tblgen.bzl", "gentbl_cc_library")
 # copybara:uncomment load("//tools/build_defs/proto/cpp:cc_proto_library.bzl", "cc_proto_library")
 
 package(
@@ -186,6 +186,7 @@ tfrt_cc_library(
         "include/tfrt/dtype/dtype.def",
         "include/tfrt/dtype/dtype.h",
         "include/tfrt/dtype/i1.h",
+        "include/tfrt/dtype/quantized_types.h",
         "include/tfrt/support/bf16.h",
         "include/tfrt/support/forward_decls.h",
         "include/tfrt/support/fp16.h",
@@ -233,10 +234,11 @@ tfrt_cc_library(
         "lib/support/string_util.cc",
     ],
     hdrs = [
+        "include/tfrt/bef/bef_buffer.h",
+        "include/tfrt/bef/bef_encoding.h",
+        "include/tfrt/bef/bef_reader.h",
         "include/tfrt/support/aligned_buffer.h",
         "include/tfrt/support/alloc.h",
-        "include/tfrt/support/bef_encoding.h",
-        "include/tfrt/support/bef_reader.h",
         "include/tfrt/support/bf16.h",
         "include/tfrt/support/byte_order.h",
         "include/tfrt/support/concurrent_vector.h",
@@ -347,10 +349,10 @@ tfrt_cc_library(
         "lib/bef_executor/bef_interpreter.cc",
     ],
     hdrs = [
+        "include/tfrt/bef/bef_encoding.h",
         "include/tfrt/bef_executor/bef_file.h",
         "include/tfrt/bef_executor/bef_interpreter.h",
         "include/tfrt/bef_executor/function_util.h",
-        "include/tfrt/support/bef_encoding.h",
     ],
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
@@ -387,11 +389,13 @@ tfrt_cc_library(
     name = "tensor",
     srcs = [
         "lib/tensor/btf.cc",
+        "lib/tensor/btf_util.cc",
         "lib/tensor/conversion_registry.cc",
         "lib/tensor/coo_host_tensor.cc",
         "lib/tensor/coo_host_tensor_kernels.cc",
         "lib/tensor/dense_host_tensor.cc",
         "lib/tensor/dense_host_tensor_kernels.cc",
+        "lib/tensor/dense_tensor_utils.cc",
         "lib/tensor/scalar_host_tensor.cc",
         "lib/tensor/string_host_tensor.cc",
         "lib/tensor/string_host_tensor_kernels.cc",
@@ -403,7 +407,7 @@ tfrt_cc_library(
     ],
     hdrs = [
         "include/tfrt/tensor/btf.h",
-        "include/tfrt/tensor/btf_reader_util.h",
+        "include/tfrt/tensor/btf_util.h",
         "include/tfrt/tensor/conversion_registry.h",
         "include/tfrt/tensor/conversion_utils.h",
         "include/tfrt/tensor/coo_host_tensor.h",
@@ -426,6 +430,8 @@ tfrt_cc_library(
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        ":bef_attr_encoder",
+        ":bef_emitter",
         ":dtype",
         ":hostcontext",
         ":support",
@@ -449,6 +455,7 @@ tfrt_cc_library(
         "include/tfrt/basic_kernels/basic_kernels.h",
     ],
     alwayslink_static_registration_src = "lib/basic_kernels/static_registration.cc",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
         ":hostcontext",
@@ -466,8 +473,10 @@ tfrt_cc_library(
     hdrs = [
         "include/tfrt/bef_converter/bef_emitter.h",
     ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        ":dtype",
         ":support",
         "@llvm-project//llvm:Support",
     ],
@@ -477,19 +486,22 @@ tfrt_cc_library(
     name = "mlirtobef",
     srcs = [
         "include/tfrt/host_context/debug_info.h",
-        "lib/bef_converter/mlir_to_bef/bef_compilation_units.cc",
+        "lib/bef_converter/mlir_to_bef/bef_attr_emitter.h",
         "lib/bef_converter/mlir_to_bef/bef_compilation_units.h",
         "lib/bef_converter/mlir_to_bef/mlir_to_bef.cc",
     ],
     hdrs = [
-        "include/tfrt/bef_converter/bef_buffer.h",
         "include/tfrt/bef_converter/mlir_to_bef.h",
+        "include/tfrt/host_context/debug_info.h",
     ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        ":bef_attr_emitter",
         ":bef_attr_encoder",
         ":bef_emitter",
         ":core_runtime_opdefs",
+        ":dtype",
         ":stream_analysis",
         ":support",
         "@llvm-project//llvm:Support",
@@ -506,6 +518,7 @@ tfrt_cc_library(
         "include/tfrt/bef_converter/mlir_to_bef_translate.h",
     ],
     alwayslink_static_registration_src = "lib/bef_converter/mlir_to_bef/static_registration.cc",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
         ":init_tfrt_dialects",
@@ -519,10 +532,17 @@ tfrt_cc_library(
 
 tfrt_cc_library(
     name = "beftomlir",
-    srcs = ["lib/bef_converter/bef_to_mlir/bef_to_mlir.cc"],
-    hdrs = ["include/tfrt/bef_converter/bef_to_mlir.h"],
+    srcs = [
+        "lib/bef_converter/bef_to_mlir/bef_attr_reader.h",
+        "lib/bef_converter/bef_to_mlir/bef_to_mlir.cc",
+    ],
+    hdrs = [
+        "include/tfrt/bef_converter/bef_to_mlir.h",
+        "include/tfrt/host_context/attribute_utils.h",
+    ],
     visibility = [":friends"],
     deps = [
+        ":bef_attr_reader",
         ":core_runtime_opdefs",
         ":support",
         "@llvm-project//llvm:Support",
@@ -558,9 +578,11 @@ tfrt_cc_library(
     hdrs = [
         "include/tfrt/bef_converter/bef_attr_encoder.h",
     ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
         ":bef_emitter",
+        ":dtype",
         ":hostcontext",
         ":support",
         "@llvm-project//llvm:Support",
@@ -578,6 +600,7 @@ filegroup(
         "@llvm-project//mlir:SideEffectTdFiles",
         "@llvm-project//mlir:include/mlir/IR/OpBase.td",
     ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
 )
 
@@ -593,23 +616,25 @@ exports_files(
     visibility = [":friends"],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "basic_kernels_opdefs_inc_gen",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = ["include"],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/basic_kernels/opdefs/basic_kernels.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/basic_kernels/opdefs/basic_kernels_opdefs.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/basic_kernels/opdefs/basic_kernels.td",
-    td_includes = ["include"],
     td_srcs = [
         ":OpBaseTdFiles",
+        "@llvm-project//mlir:CallInterfacesTdFiles",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
 )
@@ -627,161 +652,174 @@ tfrt_cc_library(
         "include/tfrt/basic_kernels/opdefs/tfrt_traits.h",
         "include/tfrt/basic_kernels/opdefs/types.h",
     ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
         ":basic_kernels_opdefs_inc_gen",
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:CallOpInterfaces",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:SideEffects",
         "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:Transforms",
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "tensor_shape_opdefs_inc_gen",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = ["include"],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/tensor/opdefs/tensor_shape.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/tensor/opdefs/tensor_shape.cpp.inc",
         ),
         (
-            "-gen-dialect-decls -dialect=ts",
+            [
+                "-gen-dialect-decls",
+                "-dialect=ts",
+            ],
             "include/tfrt/tensor/opdefs/tensor_shape_dialect.h.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tensor/opdefs/tensor_shape.td",
-    td_includes = ["include"],
     td_srcs = [
         ":OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "tensor_shape_sync_opdefs_inc_gen",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = ["include"],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/tensor/opdefs/tensor_shape_sync.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/tensor/opdefs/tensor_shape_sync.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tensor/opdefs/tensor_shape_sync.td",
-    td_includes = ["include"],
     td_srcs = [
         ":OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "tensor_opdefs_inc_gen",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = ["include"],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/tensor/opdefs/tensor.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/tensor/opdefs/tensor.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tensor/opdefs/tensor.td",
-    td_includes = ["include"],
     td_srcs = [
         ":OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "host_tensor_opdefs_inc_gen",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = ["include"],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/tensor/opdefs/host_tensor.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/tensor/opdefs/host_tensor.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tensor/opdefs/host_tensor.td",
-    td_includes = ["include"],
     td_srcs = [
         ":OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "dense_host_tensor_opdefs_inc_gen",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = ["include"],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/tensor/opdefs/dense_host_tensor.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/tensor/opdefs/dense_host_tensor.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tensor/opdefs/dense_host_tensor.td",
-    td_includes = ["include"],
     td_srcs = [
         ":OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "dense_host_tensor_sync_opdefs_inc_gen",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = ["include"],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/tensor/opdefs/dense_host_tensor_sync.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/tensor/opdefs/dense_host_tensor_sync.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tensor/opdefs/dense_host_tensor_sync.td",
-    td_includes = ["include"],
     td_srcs = [
         ":OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "coo_host_tensor_opdefs_inc_gen",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = ["include"],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/tensor/opdefs/coo_host_tensor.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/tensor/opdefs/coo_host_tensor.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tensor/opdefs/coo_host_tensor.td",
-    td_includes = ["include"],
     td_srcs = [
         ":OpBaseTdFiles",
     ],
@@ -807,6 +845,7 @@ tfrt_cc_library(
         "include/tfrt/tensor/opdefs/tensor_shape.h",
         "include/tfrt/tensor/opdefs/tensor_shape_sync.h",
     ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
         ":basic_kernels_opdefs",
@@ -822,21 +861,22 @@ tfrt_cc_library(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "core_runtime_opdefs_inc_gen",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = ["include"],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/core_runtime/opdefs/core_runtime_opdefs.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/core_runtime/opdefs/core_runtime_opdefs.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/core_runtime/opdefs/core_runtime.td",
-    td_includes = ["include"],
     td_srcs = [
         ":OpBaseTdFiles",
         "include/tfrt/core_runtime/opdefs/corert_base.td",
@@ -858,6 +898,7 @@ tfrt_cc_library(
         "include/tfrt/core_runtime/opdefs/traits.h",
         "include/tfrt/core_runtime/opdefs/types.h",
     ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
         ":basic_kernels_opdefs",
@@ -866,24 +907,26 @@ tfrt_cc_library(
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:SideEffects",
         "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:Transforms",
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "core_runtime_sync_opdefs_inc_gen",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = ["include"],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/core_runtime/opdefs/sync/core_runtime_opdefs.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/core_runtime/opdefs/sync/core_runtime_opdefs.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/core_runtime/opdefs/sync/core_runtime.td",
-    td_includes = ["include"],
     td_srcs = [
         ":OpBaseTdFiles",
         "include/tfrt/core_runtime/opdefs/corert_traits.td",
@@ -900,6 +943,7 @@ tfrt_cc_library(
     hdrs = [
         "include/tfrt/core_runtime/opdefs/sync/core_runtime.h",
     ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
         ":basic_kernels_opdefs",
@@ -1018,21 +1062,22 @@ tfrt_cc_library(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "test_kernels_opdefs_inc_gen",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = ["include"],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/test_kernels/opdefs/test_kernels.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/test_kernels/opdefs/test_kernels_opdefs.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/test_kernels/opdefs/test_kernels.td",
-    td_includes = ["include"],
     td_srcs = [
         ":OpBaseTdFiles",
         "include/tfrt/core_runtime/opdefs/corert_traits.td",
@@ -1048,6 +1093,7 @@ tfrt_cc_library(
     hdrs = [
         "include/tfrt/test_kernels/opdefs/test_kernels.h",
     ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
         ":basic_kernels_opdefs",
@@ -1061,21 +1107,21 @@ tfrt_cc_library(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "test_kernels_sync_opdefs_inc_gen",
+    includes = ["include"],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/test_kernels/opdefs/test_kernels_sync.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/test_kernels/opdefs/test_kernels_sync_opdefs.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/test_kernels/opdefs/test_kernels_sync.td",
-    td_includes = ["include"],
     td_srcs = [
         ":OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectTdFiles",
@@ -1173,21 +1219,22 @@ tfrt_cc_library(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "data_opdefs_inc_gen",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = ["include"],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/data/opdefs/data_ops.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/data/opdefs/data_ops_opdefs.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/data/opdefs/data_ops.td",
-    td_includes = ["include"],
     td_srcs = [
         ":OpBaseTdFiles",
     ],
@@ -1202,6 +1249,7 @@ tfrt_cc_library(
         "include/tfrt/data/opdefs/data_ops.h",
         "include/tfrt/data/opdefs/types.h",
     ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
         ":basic_kernels_opdefs",
@@ -1331,23 +1379,22 @@ tfrt_cc_library(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "distributed_kernels_opdefs_inc_gen",
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = ["include"],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/distributed_runtime/opdefs/kernels.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/distributed_runtime/opdefs/kernels_opdefs.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/distributed_runtime/opdefs/kernels.td",
-    td_includes = [
-        "include",
-    ],
     td_srcs = [
         ":OpBaseTdFiles",
         "@tf_runtime//:include/tfrt/core_runtime/opdefs/corert_base.td",
@@ -1364,6 +1411,7 @@ tfrt_cc_library(
         "include/tfrt/distributed_runtime/opdefs/kernels.h",
         "include/tfrt/distributed_runtime/opdefs/types.h",
     ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
         ":basic_kernels_opdefs",
@@ -1395,6 +1443,8 @@ tfrt_cc_library(
     name = "stream_analysis",
     srcs = ["lib/compiler/stream_analysis.cc"],
     hdrs = ["include/tfrt/compiler/stream_analysis.h"],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    visibility = [":friends"],
     deps = [
         ":basic_kernels_opdefs",
         "@llvm-project//mlir:IR",
@@ -1404,6 +1454,7 @@ tfrt_cc_library(
 tfrt_cc_library(
     name = "print_stream_pass",
     srcs = ["lib/compiler/print_stream_pass.cc"],
+    visibility = [":friends"],
     deps = [
         ":stream_analysis",
         "@llvm-project//mlir:Pass",
@@ -1425,6 +1476,7 @@ tfrt_cc_library(
     hdrs = [
         "include/tfrt/init_tfrt_dialects.h",
     ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
         ":basic_kernels_opdefs",
@@ -1467,21 +1519,58 @@ tfrt_cc_library(
     ],
 )
 
-gentbl(
+tfrt_cc_library(
+    name = "bef_attr_emitter",
+    srcs = [
+        "lib/bef_converter/mlir_to_bef/bef_attr_emitter.cc",
+        "lib/bef_converter/mlir_to_bef/bef_attr_emitter.h",
+        "lib/bef_converter/mlir_to_bef/bef_compilation_units.cc",
+        "lib/bef_converter/mlir_to_bef/bef_compilation_units.h",
+    ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    visibility = [":friends"],
+    deps = [
+        ":bef_attr_encoder",
+        ":bef_emitter",
+        ":core_runtime_opdefs",
+        ":support",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+    ],
+)
+
+tfrt_cc_library(
+    name = "bef_attr_reader",
+    srcs = [
+        "lib/bef_converter/bef_to_mlir/bef_attr_reader.cc",
+        "lib/bef_converter/bef_to_mlir/bef_attr_reader.h",
+    ],
+    visibility = [":friends"],
+    deps = [
+        ":core_runtime_opdefs",
+        ":dtype",
+        ":hostcontext",
+        ":support",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+    ],
+)
+
+gentbl_cc_library(
     name = "tpu_opdefs_inc_gen",
+    includes = ["include"],
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "include/tfrt/tpu/opdefs/tpu_ops.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "include/tfrt/tpu/opdefs/tpu_ops_opdefs.cpp.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tpu/opdefs/tpu_ops.td",
-    td_includes = ["include"],
     td_srcs = [
         ":OpBaseTdFiles",
         "@tf_runtime//:include/tfrt/core_runtime/opdefs/corert_base.td",

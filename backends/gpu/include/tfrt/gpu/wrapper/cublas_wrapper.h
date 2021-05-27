@@ -20,17 +20,34 @@
 
 #include "cublas.h"  // from @cuda_headers
 #include "tfrt/gpu/wrapper/blas_wrapper.h"
-#include "tfrt/support/error_util.h"
 
 namespace tfrt {
 namespace gpu {
 namespace wrapper {
 
-extern template void internal::LogResult(llvm::raw_ostream&, cublasStatus_t);
 llvm::raw_ostream& operator<<(llvm::raw_ostream& os, cublasStatus_t status);
 
-// Convert BLAS wrapper enums to cuBLAS enums.
-cublasOperation_t ToCublas(BlasOperation operation);
+template <>
+Expected<cudaDataType> Parse<cudaDataType>(llvm::StringRef name);
+llvm::raw_ostream& operator<<(llvm::raw_ostream& os, cudaDataType value);
+
+template <>
+Expected<cublasOperation_t> Parse<cublasOperation_t>(llvm::StringRef name);
+llvm::raw_ostream& operator<<(llvm::raw_ostream& os, cublasOperation_t value);
+
+template <>
+Expected<cublasGemmAlgo_t> Parse<cublasGemmAlgo_t>(llvm::StringRef name);
+llvm::raw_ostream& operator<<(llvm::raw_ostream& os, cublasGemmAlgo_t value);
+
+template <>
+struct PlatformTypeTraits<BlasDataTypeTag, cudaDataType>
+    : public CudaPlatformType {};
+template <>
+struct PlatformTypeTraits<BlasOperationTag, cublasOperation_t>
+    : public CudaPlatformType {};
+template <>
+struct PlatformTypeTraits<BlasGemmAlgoTag, cublasGemmAlgo_t>
+    : public CudaPlatformType {};
 
 llvm::Expected<OwningBlasHandle> CublasCreate(CurrentContext current);
 llvm::Error CublasDestroy(cublasHandle_t handle);
@@ -41,6 +58,41 @@ llvm::Error CublasSetPointerMode(cublasHandle_t handle,
                                  cublasPointerMode_t mode);
 llvm::Expected<cublasPointerMode_t> CublasGetPointerMode(cublasHandle_t handle);
 llvm::Error CublasSetMathMode(cublasHandle_t handle, cublasMath_t math_type);
+llvm::Expected<cublasMath_t> CublasGetMathMode(cublasHandle_t handle);
+
+llvm::Error CublasAxpyEx(CurrentContext current, cublasHandle_t handle, int n,
+                         Pointer<const void> alpha, /* host or device pointer */
+                         cudaDataType alphaType, Pointer<const void> x,
+                         cudaDataType typeX, int strideX, Pointer<void> y,
+                         cudaDataType typeY, int strideY,
+                         cudaDataType executionType);
+
+llvm::Error CublasGemmEx(CurrentContext current, cublasHandle_t handle,
+                         cublasOperation_t transA, cublasOperation_t transB,
+                         int m, int n, int k, Pointer<const void> alpha,
+                         Pointer<const void> A, cudaDataType typeA, int heightA,
+                         Pointer<const void> B, cudaDataType typeB, int heightB,
+                         Pointer<const void> beta, Pointer<void> C,
+                         cudaDataType typeC, int heightC,
+                         cudaDataType computeType, cublasGemmAlgo_t algo);
+llvm::Error CublasGemmBatchedEx(
+    CurrentContext current, cublasHandle_t handle, cublasOperation_t transA,
+    cublasOperation_t transB, int m, int n, int k, Pointer<const void> alpha,
+    llvm::ArrayRef<Pointer<const void>> Aarray, cudaDataType typeA, int heightA,
+    llvm::ArrayRef<Pointer<const void>> Barray, cudaDataType typeB, int heightB,
+    Pointer<const void> beta, llvm::ArrayRef<Pointer<void>> Carray,
+    cudaDataType typeC, int heightC, int batchCount, cudaDataType computeType,
+    cublasGemmAlgo_t algo);
+llvm::Error CublasGemmStridedBatchedEx(
+    CurrentContext current, cublasHandle_t handle, cublasOperation_t transA,
+    cublasOperation_t transB, int m, int n, int k, Pointer<const void> alpha,
+    Pointer<const void> A, cudaDataType typeA, int heightA, int64_t strideA,
+    Pointer<const void> B, cudaDataType typeB, int heightB, int64_t strideB,
+    Pointer<const void> beta, Pointer<void> C, cudaDataType typeC, int heightC,
+    int64_t strideC, int batchCount, cudaDataType computeType,
+    cublasGemmAlgo_t algo);
+
+// The functions below are not used and might be removed.
 
 llvm::Error CublasSnrm2(CurrentContext current, cublasHandle_t handle, int n,
                         Pointer<const float> x, int incx,
@@ -791,30 +843,7 @@ llvm::Error CublasZtrmm(CurrentContext current, cublasHandle_t handle,
                         Pointer<const cuDoubleComplex> A, int lda,
                         Pointer<const cuDoubleComplex> B, int ldb,
                         Pointer<cuDoubleComplex> C, int ldc);
-llvm::Error CublasGemmEx(CurrentContext current, cublasHandle_t handle,
-                         cublasOperation_t transa, cublasOperation_t transb,
-                         int m, int n, int k, Pointer<const void> alpha,
-                         Pointer<const void> A, cudaDataType Atype, int lda,
-                         Pointer<const void> B, cudaDataType Btype, int ldb,
-                         Pointer<const void> beta, Pointer<void> C,
-                         cudaDataType Ctype, int ldc, cudaDataType computeType,
-                         cublasGemmAlgo_t algo);
-llvm::Error CublasGemmBatchedEx(
-    CurrentContext current, cublasHandle_t handle, cublasOperation_t transa,
-    cublasOperation_t transb, int m, int n, int k, Pointer<const void> alpha,
-    llvm::ArrayRef<Pointer<const void>> Aarray, cudaDataType Atype, int lda,
-    llvm::ArrayRef<Pointer<const void>> Barray, cudaDataType Btype, int ldb,
-    Pointer<const void> beta, llvm::ArrayRef<Pointer<void>> Carray,
-    cudaDataType Ctype, int ldc, int batchCount, cudaDataType computeType,
-    cublasGemmAlgo_t algo);
-llvm::Error CublasGemmStridedBatchedEx(
-    CurrentContext current, cublasHandle_t handle, cublasOperation_t transa,
-    cublasOperation_t transb, int m, int n, int k, Pointer<const void> alpha,
-    Pointer<const void> A, cudaDataType Atype, int lda, int64_t strideA,
-    Pointer<const void> B, cudaDataType Btype, int ldb, int64_t strideB,
-    Pointer<const void> beta, Pointer<void> C, cudaDataType Ctype, int ldc,
-    int64_t strideC, int batchCount, cudaDataType computeType,
-    cublasGemmAlgo_t algo);
+
 }  // namespace wrapper
 }  // namespace gpu
 }  // namespace tfrt

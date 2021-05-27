@@ -39,6 +39,7 @@ namespace gpu {
 // Types that do not need a wrapper class go here.
 using GpuFunction = wrapper::Function;
 using GpuPointer = wrapper::Pointer<void>;
+using GpuDnnTensorDesc = wrapper::OwningDnnTensorDescriptor;
 
 class GpuContext {
  public:
@@ -50,14 +51,15 @@ class GpuContext {
 
   const wrapper::OwningContext& operator->() const { return context_; }
   wrapper::Context get() const { return context_.get(); }
+  wrapper::Context release();
 
-  Expected<GpuFunction> GetFunction(uint64_t key, string_view data,
-                                    string_view name);
+  // Load module from binary 'data' blob and return a (non-owning) reference to
+  // the module. The 'key' needs to be uniquely identify the `data` payload.
+  Expected<wrapper::Module> LoadModule(uint64_t key, string_view data);
 
  private:
   wrapper::OwningContext context_;
-  llvm::DenseMap<uint64_t, std::pair<wrapper::OwningModule, GpuFunction>>
-      functions_;
+  llvm::DenseMap<uint64_t, wrapper::OwningModule> modules_;
 };
 
 class GpuStream {
@@ -71,12 +73,33 @@ class GpuStream {
 
   const wrapper::OwningStream& operator->() const { return stream_; }
   wrapper::Stream get() const { return stream_.get(); }
+  wrapper::Stream release();
 
   wrapper::Context context() const { return context_->get(); }
+  AsyncValueRef<GpuContext> gpu_context() const { return context_.CopyRef(); }
 
  private:
   AsyncValueRef<GpuContext> context_;
   wrapper::OwningStream stream_;
+};
+
+// Takes an existing stream and provides it as GpuStream async value without
+// taking ownership of the stream.
+class BorrowedGpuStream {
+ public:
+  // The `stream` must belong to `context`.
+  BorrowedGpuStream(wrapper::Context context, wrapper::Stream stream);
+
+  BorrowedGpuStream(BorrowedGpuStream&&) = default;
+  BorrowedGpuStream& operator=(BorrowedGpuStream&&) = default;
+
+  ~BorrowedGpuStream();
+
+  operator AsyncValueRef<GpuStream>() const { return stream_.CopyRef(); }
+
+ private:
+  AsyncValueRef<GpuContext> context_;
+  AsyncValueRef<GpuStream> stream_;
 };
 
 class GpuEvent {
@@ -96,6 +119,22 @@ class GpuEvent {
   wrapper::OwningEvent event_;
 };
 
+class GpuModule {
+ public:
+  explicit GpuModule(AsyncValueRef<GpuContext> context, wrapper::Module module);
+  ~GpuModule();
+
+  GpuModule(GpuModule&&) = default;
+  GpuModule& operator=(GpuModule&&) = default;
+
+  const wrapper::Module* operator->() const { return &module_; }
+  wrapper::Module get() const { return module_; }
+
+ private:
+  AsyncValueRef<GpuContext> context_;
+  wrapper::Module module_;
+};
+
 // GpuAllocator base class.
 class GpuAllocator {
   friend class GpuBuffer;
@@ -107,29 +146,78 @@ class GpuAllocator {
   // less aligned parts of it to kernels.
   static const size_t kAlignment = 256;
 
-  explicit GpuAllocator(AsyncValueRef<GpuContext> context);
-  virtual ~GpuAllocator();
-
-  GpuAllocator(GpuAllocator&&) = default;
-  GpuAllocator& operator=(GpuAllocator&&) = default;
-
-  wrapper::Context context() const { return context_->get(); }
+  virtual ~GpuAllocator() = default;
 
  private:
   // Allocates memory of at least `size` bytes. If `stream` is the default, the
   // memory is accessible on any stream. Otherwise, accessing the memory on
   // other streams requires synchronization.
-  virtual Expected<GpuPointer> Allocate(size_t size, wrapper::Stream stream);
+  virtual Expected<GpuPointer> Allocate(size_t size,
+                                        wrapper::Stream stream) = 0;
 
   // Deallocates memory. If `stream` is not the default, any other stream
   // accessing the memory needs to be to be synchronized with `stream`.
-  virtual Error Deallocate(GpuPointer pointer, wrapper::Stream stream);
+  virtual Error Deallocate(GpuPointer pointer, wrapper::Stream stream) = 0;
+};
+
+class GpuDefaultAllocator : public GpuAllocator {
+ public:
+  explicit GpuDefaultAllocator(AsyncValueRef<GpuContext> context);
+
+  ~GpuDefaultAllocator() override;
+
+  GpuDefaultAllocator(GpuDefaultAllocator&&) = default;
+  GpuDefaultAllocator& operator=(GpuDefaultAllocator&&) = default;
+
+  wrapper::Context context() const { return context_->get(); }
+
+ private:
+  Expected<GpuPointer> Allocate(size_t size, wrapper::Stream stream) override;
+  Error Deallocate(GpuPointer pointer, wrapper::Stream stream) override;
 
  private:
   AsyncValueRef<GpuContext> context_;
 };
 
-// GpuBuffer owns a range of GPU memory produced by a GpuAllocator.
+// Allocator which can allocate exactly once. Holds an instance of T which could
+// be an RAII type owning the underlaying memory.
+template <typename T>
+class GpuOneShotAllocator;
+
+template <>
+class GpuOneShotAllocator<void> : public GpuAllocator {
+ public:
+  explicit GpuOneShotAllocator(GpuPointer pointer);
+
+  GpuOneShotAllocator(GpuOneShotAllocator&& other);
+  GpuOneShotAllocator& operator=(GpuOneShotAllocator&& other);
+
+ private:
+  Expected<GpuPointer> Allocate(size_t size, wrapper::Stream stream) override;
+  Error Deallocate(GpuPointer pointer, wrapper::Stream stream) override;
+
+ private:
+  GpuPointer pointer_;
+};
+
+template <typename T>
+class GpuOneShotAllocator : public GpuOneShotAllocator<void> {
+ public:
+  explicit GpuOneShotAllocator(GpuPointer pointer, T value)
+      : GpuOneShotAllocator<void>(pointer), value_(std::move(value)) {}
+
+  GpuOneShotAllocator(GpuOneShotAllocator&&) = default;
+  GpuOneShotAllocator& operator=(GpuOneShotAllocator&&) = default;
+
+  const T& value() const { return value_; }
+  T& value() { return value_; }
+
+ private:
+  T value_;
+};
+
+// GpuBuffer points to a range of GPU memory. It can be either owning the memory
+// (produced by a GpuAllocator) or non-owning.
 class GpuBuffer {
   // Creates a buffer with base `pointer`, holding `size` bytes, that will be
   // deallocated using `allocator` when destroyed.
@@ -156,7 +244,6 @@ class GpuBuffer {
   explicit operator bool() const { return pointer_ != nullptr; }
   wrapper::Pointer<void> pointer() const { return pointer_; }
   size_t size() const { return size_; }
-  const GpuAllocator& allocator() const { return *allocator_; }
 
  private:
   AsyncValueRef<GpuAllocator> allocator_;

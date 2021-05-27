@@ -26,10 +26,20 @@
 #define GPU_BLAS_OPS
 
 include "tfrt/gpu/kernels/gpu_ops_base.td"
+include "mlir/Interfaces/SideEffectInterfaces.td"
 
-def GPU_BlasHandleType : GPU_Type<"blas_handle">;
+def GPU_BlasHandleType : GPU_Type<"BlasHandle"> {
+  let mnemonic = "blas.handle";
+}
+def GPU_BlasGemmAlgoType : GPU_Type<"BlasGemmAlgo"> {
+  let mnemonic = "blas.gemm.algo";
+}
 def GPU_AnyBlasDataType : AnyTypeOf<[AnyFloat, AnyComplex, AnySignedInteger,
                                    AnyUnsignedInteger]>;
+
+def GPU_BlasDataTypeAttr : GPU_WrapperAttr<"BlasDataType">;
+def GPU_BlasOperationAttr : GPU_WrapperAttr<"BlasOperation">;
+def GPU_BlasGemmAlgoAttr : GPU_WrapperAttr<"BlasGemmAlgo">;
 
 def GPU_BlasCreateOp : GPU_Op<"blas.create"> {
   let description = [{
@@ -37,104 +47,86 @@ def GPU_BlasCreateOp : GPU_Op<"blas.create"> {
 
     This will be explicitly passed to every subsequent BLAS library call.
   }];
-  let arguments = (ins GPU_StreamType, TFRT_ChainType);
+  let arguments = (ins GPU_StreamType);
   let results = (outs GPU_BlasHandleType);
 }
 
-def GPU_BlasSaxpyOp : GPU_Op<"blas.axpy.f32"> {
+def GPU_BlasSaxpyOp : GPU_Op<"blas.axpy"> {
   let description = [{
-    tfrt_gpu.blas.axpy.f32 call BLAS saxpy function.
+    tfrt_gpu.blas.axpy call BLAS axpy function.
   }];
-  let arguments = (ins GPU_BlasHandleType, I32:$n, F32:$alpha,
-                   GPU_BufferType:$x, I32:$incx, GPU_BufferType:$y, I32:$incy,
-                   TFRT_ChainType);
+  let arguments = (ins GPU_BlasHandleType:$handle, I32:$n, F32:$alpha,
+                   GPU_BufferType:$x, GPU_BlasDataTypeAttr:$typeX, I32:$strideX,
+                   GPU_BufferType:$y, GPU_BlasDataTypeAttr:$typeY, I32:$strideY,
+                   GPU_BlasDataTypeAttr:$executionType, TFRT_ChainType:$chain);
   let results = (outs TFRT_ChainType);
+  let assemblyFormat = [{
+    $handle`,` $n`,` $alpha`,` $x`,` custom<Enum>($typeX)`,` $strideX`,` $y`,`
+    custom<Enum>($typeY)`,` $strideY`,` custom<Enum>($executionType)`,` $chain
+    attr-dict
+  }];
 }
 
-def GPU_BlasSgemmOp : GPU_Op<"blas.gemm.f32"> {
-  let description = [{
-    tfrt_gpu.blas.gemm.f32 calls BLAS sgemm function.
-  }];
-  let arguments = (ins GPU_BlasHandleType,
-                   BoolAttr:$transa, BoolAttr:$transb,
-                   I32:$m, I32:$n, I32:$k, F32:$alpha, GPU_BufferType:$A, I32:$lda,
-                   GPU_BufferType:$B, I32:$ldb, F32:$beta, GPU_BufferType:$C, I32:$ldc,
-                   TFRT_ChainType);
-  let results = (outs TFRT_ChainType);
+def GPU_BlasGemmAlgoOp : GPU_Op<"blas.gemm.algo", [NoSideEffect]> {
+  let arguments = (ins GPU_BlasGemmAlgoAttr:$algo);
+  let results = (outs GPU_BlasGemmAlgoType);
+  let builders = [
+    OpBuilder<(ins "::tfrt::gpu::wrapper::BlasGemmAlgo":$algo),
+    [{
+      auto context = $_builder.getContext();
+      auto type = BlasGemmAlgoType::get(context);
+      auto attr = BlasGemmAlgoAttr::get(context, algo);
+      return build($_builder, $_state, type, attr);
+    }]>];
+  let assemblyFormat = "custom<Enum>($algo) attr-dict";
 }
 
-def GPU_BlasGemmExOp : GPU_Op<"blas.gemm.ex"> {
+def GPU_BlasGemmOp : GPU_Op<"blas.gemm"> {
   let description = [{
-    tfrt_gpu.blas.gemm.ex This kernel is an extension of blas.gemm.<t> kernels
-                           that allows the user to individually specify the
-                           data types for each of the A, B and C matrices,
-                           the precision of computation and the GEMM
-                           algorithm to be run.
+    tfrt_gpu.blas.gemm This kernel is an extension of blas.gemm.<t> kernels
+                       that allows the user to individually specify the data
+                       types for each of the A, B and C matrices, the precision
+                       of computation and the GEMM algorithm to be run.
   }];
-  let arguments = (ins GPU_BlasHandleType,
-                   BoolAttr:$transa, BoolAttr:$transb,
-                   I32:$m, I32:$n, I32:$k,
-                   F32:$alpha,
-                   GPU_BufferType:$A, I32:$Atype, I32:$lda,
-                   GPU_BufferType:$B, I32:$Btype, I32:$ldb,
-                   F32:$beta,
-                   GPU_BufferType:$C, I32:$Ctype, I32:$ldc,
-                   I32:$computeType, I32:$algo, TFRT_ChainType);
+  let arguments = (ins GPU_BlasHandleType:$handle, GPU_BlasOperationAttr:$transA,
+    GPU_BlasOperationAttr:$transB, I32:$m, I32:$n, I32:$k, F32:$alpha,
+    GPU_BufferType:$A, GPU_BlasDataTypeAttr:$typeA, I32:$heightA, GPU_BufferType:$B,
+    GPU_BlasDataTypeAttr:$typeB, I32:$heightB, F32:$beta, GPU_BufferType:$C,
+    GPU_BlasDataTypeAttr:$typeC, I32:$heightC, GPU_BlasDataTypeAttr:$computeType,
+    GPU_BlasGemmAlgoType:$algo, TFRT_ChainType:$chain);
+
   let results = (outs TFRT_ChainType);
+  let assemblyFormat = [{
+    $handle`,` custom<Enum>($transA)`,` custom<Enum>($transB)`,`
+    $m`,` $n`,` $k`,` $alpha`,` $A`,` custom<Enum>($typeA)`,` $heightA`,` $B`,`
+    custom<Enum>($typeB)`,` $heightB`,` $beta`,` $C`,` custom<Enum>($typeC)`,`
+    $heightC`,` custom<Enum>($computeType)`,` $algo`,` $chain
+    attr-dict
+  }];
 }
 
-def GPU_BlasGemmStridedBatchedExOp : GPU_Op<"blas.gemm.strided.batched.ex"> {
+def GPU_BlasGemmBatchExOp : GPU_Op<"blas.gemm.batch"> {
   let description = [{
-    tfrt_gpu.blas.gemm.ex This kernel is an extension of blas.gemm.ex that
+    tfrt_gpu.blas.gemm.batch This kernel is an extension of blas.gemm that
                            performs the matrix-matrix multiplication of a batch
                            of matrices and allows the individual specification
-                           of the data types for each of the A, B and C matrix
-                           arrays, the precision of computation and the GEMM
-                           algorithm to be run. Address offsets strideA,
-                           strideB and strideC determine the locations of input
-                           and output matrices in future instances
+                           strides between consecutive elements.
   }];
-  let arguments = (ins GPU_BlasHandleType,
-                   BoolAttr:$transa, BoolAttr:$transb,
-                   I32:$m, I32:$n, I32:$k,
-                   F32:$alpha,
-                   GPU_BufferType:$A, I32:$Atype, I32:$lda, I64:$strideA,
-                   GPU_BufferType:$B, I32:$Btype, I32:$ldb, I64:$strideB,
-                   F32:$beta,
-                   GPU_BufferType:$C, I32:$Ctype, I32:$ldc, I64:$strideC,
-                   I32:$batch_count,
-                   I32:$computeType, I32:$algo, TFRT_ChainType);
+  let arguments = (ins GPU_BlasHandleType:$handle, GPU_BlasOperationAttr:$transA,
+    GPU_BlasOperationAttr:$transB, I32:$m, I32:$n, I32:$k, F32:$alpha,
+    GPU_BufferType:$A, GPU_BlasDataTypeAttr:$typeA, I32:$heightA, I64:$strideA,
+    GPU_BufferType:$B, GPU_BlasDataTypeAttr:$typeB, I32:$heightB, I64:$strideB,
+    F32:$beta,  GPU_BufferType:$C, GPU_BlasDataTypeAttr:$typeC, I32:$heightC,
+    I64:$strideC, I32:$batchCount, GPU_BlasDataTypeAttr:$computeType,
+    GPU_BlasGemmAlgoType:$algo, TFRT_ChainType:$chain);
   let results = (outs TFRT_ChainType);
-}
-
-// TODO(b/175169391): Remove this Op once the tfrt_gpu dialect moves from
-// async to sync Ops.
-def GPU_BlasSyncSgemmOp : GPU_Op<"blas.sync.gemm.f32"> {
-  let description = [{
-    tfrt_gpu.blas.sync.gemm.f32 calls BLAS sgemm function.
+  let assemblyFormat = [{
+    $handle`,` custom<Enum>($transA)`,` custom<Enum>($transB)`,`
+    $m`,` $n`,` $k`,` $alpha`,` $A`,` custom<Enum>($typeA)`,` $heightA
+    `,` $strideA`,` $B`,` custom<Enum>($typeB)`,` $heightB`,` $strideB`,` $beta`,`
+    $C`,` custom<Enum>($typeC)`,` $heightC`,` $strideC`,` $batchCount`,`
+    custom<Enum>($computeType)`,` $algo`,` $chain attr-dict
   }];
-  let arguments = (ins GPU_BlasHandleType,
-                   BoolAttr:$transa, BoolAttr:$transb,
-                   I32:$m, I32:$n, I32:$k, F32:$alpha, GPU_BufferType:$A, I32:$lda,
-                   GPU_BufferType:$B, I32:$ldb, F32:$beta, GPU_BufferType:$C, I32:$ldc,
-                   TFRT_ChainType);
-  let results = (outs TFRT_ChainType);
-}
-
-// TODO(b/175169391): Remove this Op once the tfrt_gpu dialect moves from
-// async to sync Ops.
-def GPU_BlasSyncGemmExOp : Op<GPU_Dialect, "blas.sync.gemm_ex"> {
-  let description = [{
-    tfrt_gpu.blas.sync.gemm_ex calls BLAS GemmEx function.
-  }];
-  let arguments = (ins GPU_BlasHandleType,
-                   I32:$m, I32:$n, I32:$k, GPU_AnyBlasDataType:$alpha,
-                   GPU_BufferType:$A, I32:$Atype, I32:$lda, GPU_BufferType:$B,
-                   I32:$Btype, I32:$ldb, GPU_AnyBlasDataType:$beta,
-                   GPU_BufferType:$C, I32:$Ctype, I32:$ldc, I32:$algorithm,
-                   TFRT_ChainType, I32Attr:$computeType, BoolAttr:$transa,
-                   BoolAttr:$transb);
-  let results = (outs TFRT_ChainType);
 }
 
 #endif  // GPU_OPS

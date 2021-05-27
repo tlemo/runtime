@@ -49,8 +49,10 @@ class GpuCrtAllocator {
   // (i.e. returned from Allocate() again) until the use on a non-primary stream
   // has finished. This can result in extra synchronization and some overheads,
   // especially when operating close to memory capacity.
-  virtual llvm::Expected<RCReference<GpuCrtBuffer>> Allocate(
-      size_t size, wrapper::Stream stream) = 0;
+  virtual llvm::Expected<RCReference<GpuCrtBuffer>> AllocateBuffer(
+      size_t size, wrapper::Stream stream) {
+    return MakeStringError("This method has not been implemented.");
+  }
 
   // Lets the allocator know that the space identified by `buffer` will
   // not be used in the future. Users are permitted to call this method

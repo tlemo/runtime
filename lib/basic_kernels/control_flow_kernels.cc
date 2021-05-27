@@ -27,11 +27,9 @@ namespace tfrt {
 
 static Chain TFRTNewChain() { return Chain(); }
 
-static void TFRTMergeChains(Argument<Chain> chain_in,
-                            RemainingArguments remaining_arguments,
-                            Result<Chain> chain_out) {
-  // We can return an arbitrary chain argument - we know that all are ready.
-  chain_out.Set(chain_in);
+static Chain TFRTMergeChains(RemainingArguments arguments) {
+  // We can directly return a chain - we know that all args are ready.
+  return Chain();
 }
 
 static void TFRTCall(RemainingArguments args, RemainingResults results,
@@ -145,10 +143,6 @@ static void TFRTCase(RemainingArguments args, RemainingResults results,
 // the false_fn. The functions must have matching signatures, and their
 // signatures must match tfrt.if's signature, exempting the extra i1 for the
 // condition.
-//
-// tfrt.if supports "non-strict" invocation: it is safe to invoke before all its
-// arguments are ready. The caller must set the bef.nonstrict attribute on
-// tfrt.if to make an invocation non-strict.
 static void TFRTIf(RemainingArguments args, RemainingResults results,
                    Attribute<Function> true_fn_const,
                    Attribute<Function> false_fn_const,

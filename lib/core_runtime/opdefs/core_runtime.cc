@@ -26,6 +26,7 @@
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/Transforms/InliningUtils.h"
 #include "tfrt/basic_kernels/opdefs/tfrt_base.h"
 #include "tfrt/basic_kernels/opdefs/types.h"
 #include "tfrt/core_runtime/opdefs/attributes.h"
@@ -34,6 +35,20 @@
 
 namespace tfrt {
 namespace corert {
+
+namespace {
+
+struct CoreRTInlinerInterface : public mlir::DialectInlinerInterface {
+  using DialectInlinerInterface::DialectInlinerInterface;
+
+  bool isLegalToInline(Operation *op, Region *dest, bool would_be_cloned,
+                       BlockAndValueMapping &) const final {
+    // All CoreRT dialect ops can be inlined.
+    return true;
+  }
+};
+
+}  // namespace
 
 //===----------------------------------------------------------------------===//
 // CoreRTDialect Dialect
@@ -49,7 +64,10 @@ CoreRTDialect::CoreRTDialect(MLIRContext *context)
   addAttributes<ShapeAttr>();
 
   addTypes<StringType, TensorHandleType, OpHandlerType, ResourceType,
-           VariantType>();
+           VariantType, Quint8Type, Qint8Type, Qint16Type, Qint32Type,
+           Quint16Type>();
+
+  addInterfaces<CoreRTInlinerInterface>();
 
   addOperations<
 #define GET_OP_LIST
@@ -115,6 +133,11 @@ mlir::Type CoreRTDialect::parseType(mlir::DialectAsmParser &parser) const {
   if (data == "tensorhandle") return TensorHandleType::get(getContext());
   if (data == "resource") return ResourceType::get(getContext());
   if (data == "variant") return VariantType::get(getContext());
+  if (data == "quint8") return Quint8Type::get(getContext());
+  if (data == "qint8") return Qint8Type::get(getContext());
+  if (data == "qint16") return Qint16Type::get(getContext());
+  if (data == "qint32") return Qint32Type::get(getContext());
+  if (data == "quint16") return Quint16Type::get(getContext());
 
   // TODO(tfrt-devs): Every type should be properly defined. Remove
   // OpaqueType here once all types are defined in corerrt.
@@ -146,6 +169,31 @@ void CoreRTDialect::printType(mlir::Type type,
 
   if (type.isa<VariantType>()) {
     os << "variant";
+    return;
+  }
+
+  if (type.isa<Quint8Type>()) {
+    os << "quint8";
+    return;
+  }
+
+  if (type.isa<Quint16Type>()) {
+    os << "quint16";
+    return;
+  }
+
+  if (type.isa<Qint8Type>()) {
+    os << "qint8";
+    return;
+  }
+
+  if (type.isa<Qint16Type>()) {
+    os << "qint16";
+    return;
+  }
+
+  if (type.isa<Qint32Type>()) {
+    os << "qint32";
     return;
   }
 

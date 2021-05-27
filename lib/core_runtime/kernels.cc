@@ -50,8 +50,6 @@ static void HTToTensorHandle(Argument<HostTensor> arg, Argument<Chain> in_chain,
                              Result<TensorHandle> tensorhandle_output,
                              const ExecutionContext &exec_ctx) {
   // Since we know the Tensor is present, we can access its metadata.
-  // TODO(b/158775215): Replace the placeholder device with the device from
-  // HostTensor.
   tensorhandle_output.Emplace(exec_ctx.host()->GetHostDeviceRef(),
                               arg->metadata(), arg.ValueRef());
 }
@@ -123,31 +121,31 @@ static Chain OpAttrsSetDType(Argument<OpAttrs> attrs, StringAttribute key,
 
 static Chain OpAttrsSetDense(Argument<OpAttrs> attrs, StringAttribute key,
                              DenseAttr value) {  // NOLINT
-  attrs->Set(key, value);
+  attrs->SetExternal(key, value);
   return Chain();
 }
 
 static Chain OpAttrsSetAggregate(Argument<OpAttrs> attrs, StringAttribute key,
                                  AggregateAttr value) {  // NOLINT
-  attrs->Set(key, value);
+  attrs->SetExternal(key, value);
   return Chain();
 }
 static Chain OpAttrsSetShape(Argument<OpAttrs> attrs, StringAttribute key,
                              ShapeAttr value) {  // NOLINT
-  attrs->Set(key, value);
+  attrs->SetExternal(key, value);
   return Chain();
 }
 
 template <typename T>
 static Chain OpAttrsSetArray(Argument<OpAttrs> attrs, StringAttribute key,
                              ArrayAttribute<T> value) {
-  attrs->SetArray(key, value.data());
+  attrs->SetArrayExternal(key, value.data());
   return Chain();
 }
 
 static Chain OpAttrsSetString(Argument<OpAttrs> attrs, StringAttribute key,
                               StringAttribute value) {
-  attrs->SetString(key, value.get());
+  attrs->SetStringExternal(key, value.get());
   return Chain();
 }
 
@@ -446,10 +444,6 @@ static llvm::Expected<bool> GetTensorPredicateValue(const Tensor &tensor) {
 // Attributes: The first attribute is the true_fn, and the second attribute is
 // the false_fn. The functions must have matching signatures, and their
 // signatures must match corert.cond's signature.
-//
-// corert.cond supports "non-strict" invocation: it is safe to invoke before all
-// its arguments are ready. The caller must set the bef.nonstrict attribute on
-// hex.if to make an invocation non-strict.
 static void CoreRtConditional(RemainingArguments args, RemainingResults results,
                               Attribute<Function> true_fn_const,
                               Attribute<Function> false_fn_const,
@@ -826,46 +820,67 @@ static AsyncValueRef<TensorType> CoreRtGetDstTensorType(
 // specifically a helper for obtaining the index value of `tf.Case` op.
 static AsyncValueRef<int32_t> CoreRtTensorHandleToInt32(
     const TensorHandle &src, const ExecutionContext &exec_ctx) {
-  auto get_index = [exec_ctx](AsyncValue *src_av,
+  auto get_index = [exec_ctx](AsyncValue *src_av, const Device &device,
                               AsyncValueRef<int32_t> result) {
     if (src_av->IsError()) {
       result.SetError(src_av->GetError().message);
     } else {
       assert(src_av->IsAvailable() && "Tensor should be available.");
-      // Check the validity of the index.
-      if (!src_av->IsType<DenseHostTensor>() &&
-          src_av->get<DenseHostTensor>().dtype() != GetDType<int32_t>()) {
-        result.SetError(
-            {"Expecting a DenseHostTensor of int32 as branch index.",
-             ErrorCode::kInvalidArgument});
-      } else if (src_av->get<DenseHostTensor>().shape().GetRank() != 0 &&
-                 src_av->get<DenseHostTensor>().shape() != TensorShape{1}) {
-        result.SetError(
-            {"The tensor should have only one element, which is the index.",
-             ErrorCode::kInvalidArgument});
-      } else {
-        auto *index_ptr = src_av->get<DenseHostTensor>().data();
+
+      // Convert TensorHandle's underlying tensor to DenseHostTensor if not
+      // already is.
+      AsyncValueRef<Tensor> converted_tensor_avref;
+      converted_tensor_avref =
+          ConvertTensor(exec_ctx, src_av->get<Tensor>(), device, device,
+                        DenseHostTensor::kTensorType);
+
+      converted_tensor_avref.AndThen([converted_tensor_avref =
+                                          converted_tensor_avref.CopyRef(),
+                                      result = result.CopyRef()] {
+        // Check the validity of the index.
+        AsyncValue *converted_tensor_av =
+            converted_tensor_avref.GetAsyncValue();
+        if (!converted_tensor_av->IsType<DenseHostTensor>() &&
+            converted_tensor_av->get<DenseHostTensor>().dtype() !=
+                GetDType<int32_t>()) {
+          result.SetError(
+              {"Expecting a DenseHostTensor of int32 as branch index.",
+               ErrorCode::kInvalidArgument});
+        } else if (converted_tensor_av->get<DenseHostTensor>()
+                           .shape()
+                           .GetRank() != 0 &&
+                   converted_tensor_av->get<DenseHostTensor>().shape() !=
+                       TensorShape{1}) {
+          result.SetError(
+              {"The tensor should have only one element, which is the index.",
+               ErrorCode::kInvalidArgument});
+        }
+
+        auto *index_ptr = converted_tensor_av->get<DenseHostTensor>().data();
         int index = *reinterpret_cast<int32_t *>(index_ptr);
         result.emplace(index);
-      }
+      });
     }
   };
 
+  assert(src.IsDeviceAvailable() && "TensorHandle device should be available.");
   AsyncValue *src_av = src.GetAsyncTensor();
+  const RCReference<Device> &device = src.GetAvailableDevice();
 
   if (src_av->IsAvailable()) {
     auto result = MakeUnconstructedAsyncValueRef<int32_t>(exec_ctx.host());
-    get_index(src_av, result.CopyRef());
+    get_index(src_av, *device, result.CopyRef());
     return result;
   } else {
     RCReference<IndirectAsyncValue> result_ind_av =
         MakeIndirectAsyncValue(exec_ctx.host());
     auto result = AsyncValueRef<int32_t>(result_ind_av.CopyRef());
-    src_av->AndThen([src_av = FormRef(src_av), get_index,
-                     result_ind_av = std::move(result_ind_av), exec_ctx] {
+    src_av->AndThen([src_av = FormRef(src_av), device = device.CopyRef(),
+                     get_index, result_ind_av = std::move(result_ind_av),
+                     exec_ctx] {
       auto result_value =
           MakeUnconstructedAsyncValueRef<int32_t>(exec_ctx.host());
-      get_index(src_av.get(), result_value.CopyRef());
+      get_index(src_av.get(), *device, result_value.CopyRef());
       result_ind_av->ForwardTo(FormRef(result_value.GetAsyncValue()));
     });
     return result;

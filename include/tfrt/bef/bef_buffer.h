@@ -14,21 +14,22 @@
  * limitations under the License.
  */
 
-// CUDA testing kernels
-//
-// This file declares the C++ functions that implement CUDA test-only kernels.
-#ifndef TFRT_BACKENDS_GPU_LIB_KERNELS_CUDA_TEST_KERNELS_H_
-#define TFRT_BACKENDS_GPU_LIB_KERNELS_CUDA_TEST_KERNELS_H_
+// This file declares a buffer type for storing BEF binary.
+
+#ifndef TFRT_SUPPORT_BEF_BUFFER_H_
+#define TFRT_SUPPORT_BEF_BUFFER_H_
+
+#include "tfrt/bef/bef_encoding.h"
+#include "tfrt/support/aligned_buffer.h"
 
 namespace tfrt {
 
-class KernelRegistry;
+// A BEF file should be loaded to a buffer aligned by kAttributeMaxAlignment.
+constexpr size_t GetRequiredBefAlignment() { return kAttributeMaxAlignment; }
 
-namespace gpu {
+// Buffer for storing BEF binary.
+using BefBuffer = AlignedBuffer<GetRequiredBefAlignment()>;
 
-void RegisterGpuTestKernels(KernelRegistry* kernel_reg);
-
-}  // namespace gpu
 }  // namespace tfrt
 
-#endif  // TFRT_BACKENDS_GPU_LIB_KERNELS_CUDA_TEST_KERNELS_H_
+#endif  // TFRT_SUPPORT_BEF_BUFFER_H_

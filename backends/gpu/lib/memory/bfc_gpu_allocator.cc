@@ -70,7 +70,7 @@ BfcGpuAllocator::BfcGpuAllocator(const wrapper::CurrentContext& current)
   ReassignChunkToBin(c);
 }
 
-llvm::Expected<RCReference<gpu::GpuCrtBuffer>> BfcGpuAllocator::Allocate(
+llvm::Expected<RCReference<gpu::GpuCrtBuffer>> BfcGpuAllocator::AllocateBuffer(
     size_t num_bytes, wrapper::Stream stream) {
   TFRT_TRACE_SCOPE(Default, "BfcGpuAllocator::Allocate");
   // First, always allocate memory of at least 256 bytes, and always

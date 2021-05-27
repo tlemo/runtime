@@ -401,26 +401,6 @@ static Chain TestPrintBool(Chain in_ch, bool value) {
   return Chain();
 }
 
-static Chain TestPrintTypedAttr(tfrt::Chain in_ch,
-                                RemainingAttributes attributes) {
-  for (int i = 0; i < attributes.size(); ++i) {
-    auto attr = attributes.GetTypedAttr(i);
-    if (auto i64_attr = attr.dyn_cast<I64Attr>()) {
-      tfrt::outs() << "I64: " << i64_attr.GetValue() << "\n";
-    } else if (auto f32_attr = attr.dyn_cast<F32Attr>()) {
-      tfrt::outs() << "F32: " << f32_attr.GetValue() << "\n";
-    } else if (auto i1_attr = attr.dyn_cast<I1Attr>()) {
-      tfrt::outs() << "I1: " << i1_attr.GetValue() << "\n";
-    } else {
-      // TODO(tfrt-devs): Test more typed attrs.
-      tfrt::outs() << "unknown attr\n";
-    }
-  }
-  tfrt::outs().flush();
-
-  return Chain();
-}
-
 static void TestMultiArgResult(RemainingArguments args,
                                RemainingResults results) {
   assert(args.size() == results.size());
@@ -447,6 +427,22 @@ static Chain TestCost(tfrt::Chain in_ch, I64Attr id) {
   return Chain();
 }
 
+static void TestGetUniqueness(RemainingArguments args,
+                              RemainingResults results) {
+  for (int i = 0; i < args.size(); ++i) {
+    results[i] = MakeAvailableAsyncValueRef<bool>(args[i]->IsUnique());
+  }
+}
+
+static void TestMakeIndirect(RemainingArguments args,
+                             RemainingResults results) {
+  for (int i = 0; i < args.size(); ++i) {
+    auto indirect = MakeIndirectAsyncValue();
+    indirect->ForwardTo(FormRef(args[i]));
+    results[i] = std::move(indirect);
+  }
+}
+
 void RegisterSimpleTestKernels(KernelRegistry* registry) {
   registry->AddKernel("tfrt_test.fail", TFRT_KERNEL(TestFail));
   registry->AddKernel("tfrt_test.partial_fail", TFRT_KERNEL(TestPartialFail));
@@ -470,9 +466,10 @@ void RegisterSimpleTestKernels(KernelRegistry* registry) {
                       TFRT_KERNEL(TestConstDenseAttr));
   registry->AddKernel("tfrt_test.unique_loc", TFRT_KERNEL(TestUniqueLoc));
   registry->AddKernel("tfrt_test.print_bool", TFRT_KERNEL(TestPrintBool));
-  registry->AddKernel("tfrt_test.print_typed_attr",
-                      TFRT_KERNEL(TestPrintTypedAttr));
   registry->AddKernel("tfrt_test.test_cost", TFRT_KERNEL(TestCost));
+  registry->AddKernel("tfrt_test.get_uniqueness",
+                      TFRT_KERNEL(TestGetUniqueness));
+  registry->AddKernel("tfrt_test.make_indirect", TFRT_KERNEL(TestMakeIndirect));
   registry->AddKernel("tfrt_test.multi_arg_result",
                       TFRT_KERNEL(TestMultiArgResult));
   registry->AddKernel("tfrt_test.print_debug_info",

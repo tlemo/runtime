@@ -30,7 +30,6 @@
 #include "tfrt/host_context/location.h"
 #include "tfrt/support/error_util.h"
 #include "unsupported/Eigen/CXX11/Tensor"  // from @eigen_archive
-#include "unsupported/Eigen/CXX11/src/Tensor/TensorDeviceGpu.h"  // from @eigen_archive
 
 namespace tfrt {
 namespace gpu {
@@ -93,7 +92,7 @@ static Expected<DenseGpuTensor> GpuAddOp(GpuDispatchContext* dctx,
   size_t size_in_bytes = result_md.GetHostSizeInBytes();
 
   TFRT_ASSIGN_OR_RETURN(RCReference<GpuCrtBuffer> buffer,
-                        dctx->allocator()->Allocate(
+                        dctx->allocator()->AllocateBuffer(
                             /*size=*/size_in_bytes, dctx->stream()));
 
   auto result =

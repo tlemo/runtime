@@ -67,11 +67,9 @@ TEST_P(Test, TestLogError) {
   EXPECT_TRUE(IsSuccess(Init(platform)));
   TFRT_ASSERT_AND_ASSIGN(auto count, DeviceGetCount(platform));
   ASSERT_GT(count, 0);
-  std::string log_string = [&] {
-    std::string buffer;
-    llvm::raw_string_ostream(buffer) << DeviceGet(platform, count).takeError();
-    return buffer;
-  }();
+  std::string log_string;
+  llvm::raw_string_ostream(log_string)
+      << DeviceGet(platform, count).takeError();
   if (platform == Platform::CUDA) {
     EXPECT_TRUE(Contains(log_string, "cuDeviceGet"));
     EXPECT_TRUE(Contains(log_string, "CUDA_ERROR_INVALID_DEVICE"));
@@ -645,7 +643,7 @@ TEST_P(Test, UnalignedPointeeType) {
 }
 
 TEST_P(Test, MemHostGetDevicePointer) {
-  auto platform = Platform::CUDA;
+  auto platform = GetParam();
   ASSERT_TRUE(IsSuccess(Init(platform)));
   TFRT_ASSERT_AND_ASSIGN(auto count, DeviceGetCount(platform));
   ASSERT_GT(count, 0);
@@ -662,7 +660,7 @@ TEST_P(Test, MemHostGetDevicePointer) {
 }
 
 TEST_P(Test, MemGetAddressRange) {
-  auto platform = Platform::CUDA;
+  auto platform = GetParam();
   ASSERT_TRUE(IsSuccess(Init(platform)));
   TFRT_ASSERT_AND_ASSIGN(auto count, DeviceGetCount(platform));
   ASSERT_GT(count, 0);
@@ -675,6 +673,78 @@ TEST_P(Test, MemGetAddressRange) {
   TFRT_ASSERT_AND_ASSIGN(auto range, MemGetAddressRange(current, char_ptr));
   EXPECT_EQ(char_ptr, range.base);
   EXPECT_EQ(size_bytes, range.size_bytes);
+}
+
+TEST_P(Test, OutOfMemory) {
+  auto platform = GetParam();
+  ASSERT_TRUE(IsSuccess(Init(platform)));
+  TFRT_ASSERT_AND_ASSIGN(auto count, DeviceGetCount(platform));
+  ASSERT_GT(count, 0);
+  TFRT_ASSERT_AND_ASSIGN(auto device, DeviceGet(platform, 0));
+  TFRT_ASSERT_AND_ASSIGN(auto context, CtxCreate(CtxFlags::SCHED_AUTO, device));
+  TFRT_ASSERT_AND_ASSIGN(auto current, CtxGetCurrent());
+  size_t size_bytes = 1ull << 40;
+  std::string log_string;
+  llvm::raw_string_ostream(log_string)
+      << MemAlloc(current, size_bytes).takeError();
+  EXPECT_TRUE(Contains(log_string, "Out of memory trying to allocate 1.00TiB"));
+}
+
+static void CheckDanglingResources(
+    Expected<OwningContext> context,
+    std::function<llvm::Error(Context)> destroy) {
+  ASSERT_TRUE(IsSuccess(context.takeError()));
+  {
+    TFRT_ASSERT_AND_ASSIGN(auto current, CtxSetCurrent(context->get()));
+    TFRT_ASSERT_AND_ASSIGN(auto stream,
+                           StreamCreate(current, StreamFlags::DEFAULT));
+    TFRT_ASSERT_AND_ASSIGN(auto event,
+                           EventCreate(current, EventFlags::DEFAULT));
+    const size_t size_bytes = 32;
+    TFRT_ASSERT_AND_ASSIGN(auto device_mem, MemAlloc(current, size_bytes));
+    TFRT_ASSERT_AND_ASSIGN(
+        auto host_mem,
+        MemHostAlloc(current, size_bytes, MemHostAllocFlags::DEFAULT));
+    char array[size_bytes];
+    TFRT_ASSERT_AND_ASSIGN(auto registered_mem,
+                           MemHostRegister(current, array, size_bytes,
+                                           MemHostRegisterFlags::DEFAULT));
+
+    // Release resources and let the driver destroy them with the context.
+    stream.release();
+    event.release();
+    device_mem.release();
+    host_mem.release();
+    registered_mem.release();
+  }
+
+  std::string log_string;
+  llvm::raw_string_ostream(log_string) << destroy(context->release());
+
+#ifndef NDEBUG  // Dangling resources are only detected in !NDEBUG builds.
+  EXPECT_TRUE(Contains(log_string, "has dangling resources"));
+  EXPECT_TRUE(Contains(log_string, "(stream)"));
+  EXPECT_TRUE(Contains(log_string, "(event)"));
+  EXPECT_TRUE(Contains(log_string, "(device memory)"));
+  EXPECT_TRUE(Contains(log_string, "(host memory)"));
+  EXPECT_TRUE(Contains(log_string, "(registered memory)"));
+#endif
+}
+
+TEST_P(Test, DanglingResources) {
+  auto platform = GetParam();
+  ASSERT_TRUE(IsSuccess(Init(platform)));
+  TFRT_ASSERT_AND_ASSIGN(auto count, DeviceGetCount(platform));
+  ASSERT_GT(count, 0);
+  TFRT_ASSERT_AND_ASSIGN(auto device, DeviceGet(platform, 0));
+
+  CheckDanglingResources(CtxCreate(CtxFlags::SCHED_AUTO, device), &CtxDestroy);
+  CheckDanglingResources(DevicePrimaryCtxRetain(device), [&](Context) {
+    return DevicePrimaryCtxRelease(device);
+  });
+  CheckDanglingResources(DevicePrimaryCtxRetain(device), [&](Context) {
+    return DevicePrimaryCtxReset(device);
+  });
 }
 
 }  // namespace wrapper

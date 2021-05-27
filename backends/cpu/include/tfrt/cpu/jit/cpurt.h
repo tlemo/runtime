@@ -22,6 +22,7 @@
 #define TFRT_BACKENDS_CPU_JIT_CPURT_H_
 
 #include <cstdint>
+#include <memory>
 #include <type_traits>
 
 #include "mlir/Dialect/Async/IR/AsyncTypes.h"
@@ -32,6 +33,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "tfrt/cpu/jit/async_runtime.h"
 #include "tfrt/cpu/jit/async_runtime_api.h"
+#include "tfrt/dtype/dtype.h"
 #include "tfrt/host_context/kernel_utils.h"
 #include "tfrt/support/forward_decls.h"
 #include "tfrt/support/msan.h"
@@ -44,75 +46,65 @@ class Tensor;
 namespace cpu {
 namespace jit {
 
-// TODO(b/184896224): Documentation below is forward looking and does not
-// represent what is ready today. Currently JitExecutable will only specialize
-// to the shapes of the inputs.
-
 // Compiled module example:
 //
 //   module @kernel attributes { tfrt.compiled, cpurt.entrypoint = @main } {
 //     func @main(
-//       %input0: memref<?x?xf32>,
-//       %input1: memref<?x?xf32> { cpurt.specialize.shape = "<strategy>" },
-//       %perm: memref<4xi32>     { cpurt.specialize.value = "<strategy>" }
+//       %input0: memref<*xf32>   { cpurt.constraint = "rank"  },
+//       %input1: memref<?x?xf32> { cpurt.constraint = "shape" },
+//       %perm: memref<4xi32>     { cpurt.constraint = "value" }
 //     ) -> !async.value<memref<?x?xf32>> {
 //       ...
 //       return %result : !async.value<memref<?x?xf32>>
 //     }
 //   }
 //
-// Compiled function might require specialization of some of its arguments at
-// runtime to the concrete shape or value that is only available at runtime.
+// Compiled function can define constraints on its inputs, that must be
+// resolved before the function can be compiled. If constraints can't be
+// resolved statically from the function signature (e.g. rank is unknown), then
+// the runtime will specialize generic function to concrete operands at runtime
+// (concrete operands rank, shape or value).
 //
-// If no function arguments have a hard requirement to be specialized at
-// runtime, compiler will compile the generic function, and use it at runtime to
-// execute for inputs of all shapes and values.
+// If function inputs do not have unresolved constraints, compiler will
+// instantiate the default executable, that can take all compatible inputs
+// without recompilation.
 //
-// (a) Shape specialization:
 //
-//     %arg : <type> { cpurt.specialize.shape = "<strategy>" }
+// (a) Rank constraint:
+//
+//     %arg : tensor<*xf32> { cpurt.constraint = "rank" }
+//
+//     Before compiling the function, unranked input type will be updated to the
+//     corresponding ranked input type (e.g. unranked tensor -> ranked tensor).
+//
+// (b) Shape constraint:
+//
+//     %arg : tensor<?x?xf32> { cpurt.constraint = "shape" }
 //
 //     Shape of the runtime argument will be used to specialize the compiled
 //     function, if this shape seen the first time, it will trigger function
 //     recompilation.
 //
-//     Strategy:
-//       - "enabled"   Shape can be used for the specialization but not required
-//                     for the compilation.
-//       - "required"  Function must be specialized for concrete shape of the
-//                     argument.
-//       - "disabled"  Never specialize for the shape of the argument (e.g. it
-//                     is known that the shape varies a lot).
+// (c) Value constraint:
 //
-// (b) Value specialization:
-//
-//     %arg : <type> { cpurt.specialize.value = "<strategy>" }
+//     %reduction_dimension : tensor<i32> { cpurt.constraint = "value" }
 //
 //     Runtime value will be sunk into the body of a function as a constant,
 //     and the function will be recompiled. For example this can be used to sink
 //     reduction dimensions to generate more efficient code.
 //
-//     Value specialization is only supported for the integer data type, in
-//     practice it should be reduction dimension, dimension permutation, or any
-//     similar value that does not change often, and is required for generating
+//     Value constraint is only supported for the integer data type, in practice
+//     it should be reduction dimension, dimension permutation, or any similar
+//     value that does not change often, and is required for generating
 //     efficient code.
-//
-//     Strategy:
-//       - "enabled"   Value can be used for the specialization but not required
-//                     for the compilation.
-//       - "required"  Function must be specialized for concrete value of the
-//                     argument.
-//       - "disabled"  Never specialize for the value of the argument (e.g. it
-//                     is known that the value varies a lot).
-//
 //
 //  Shape and value specialization example:
 //
 //    // Computes `%arg0` mean value over the axis specified by the `%arg1`.
 //    // See: https://www.tensorflow.org/api_docs/python/tf/math/reduce_mean
-//    func @mean(%arg0: tensor<?x?xf32>, %arg1: tensor<f32>) -> tensor<?xf32> {
+//    func @mean(%arg0: tensor<?x?xf32>, %arg1: tensor<i32>) -> tensor<?xf32> {
 //      %0 = "tf.Mean(%arg0, %arg1)
-//             : (tensor<?x?xf32>, tensor<f32>) -> tensor<?xf32>
+//             : (tensor<?x?xf32>, tensor<i32>) -> tensor<?xf32>
 //      return %0: tensor<?xf32>
 //    }
 //
@@ -128,13 +120,13 @@ namespace jit {
 //    improvement, because without knowing the reduction axis we can't infer
 //    any new information from the input shape alone.
 //
-//  Value specialization to input values: [ <skip-f32-input>, dense<1 : i32> ]
+//  Value specialization to input values: [ <do-not-specialize>, dense<1 : i32>]
 //
 //    func @mean(%arg0: tensor<4x8xf32>) -> tensor<4xf32> {
 //      %0 = "tf.Constant" { value = dense<1 : i32>} -> tensor<i32>
 //      %1 = "tf.Mean(%arg0, %0)
 //             : (tensor<4x8xf32>, tensor<i32>) -> tensor<4xf32>
-//      return %1 : ensor<4xf32>
+//      return %1 : tensor<4xf32>
 //    }
 //
 //    By specializing function to the concrete value of the second argument, by
@@ -183,19 +175,12 @@ struct CompilationOptions {
   llvm::function_ref<void(mlir::OpPassManager&)> register_pass_pipeline;
 };
 
-// Creates a JitExecutable from the serialized MLIR module. Compiles a default
-// executable if compiled module does not have a requirement to specialize shape
-// or value for any of the arguments.
-Expected<JitExecutable> CreateJitExecutable(string_view mlir_module,
-                                            string_view entrypoint,
-                                            const CompilationOptions& opts);
-
 //----------------------------------------------------------------------------//
 // Types for passing compiled kernel arguments and passing back results.
 //----------------------------------------------------------------------------//
 
 struct MemrefDesc {
-  // TODO(ezhulenev): Add dtype so that VerifyMemrefOperand can check it.
+  DType dtype;
   void* data;
   ssize_t offset;
   SmallVector<ssize_t, 4> sizes;
@@ -208,6 +193,7 @@ raw_ostream& operator<<(raw_ostream& os, const MemrefDesc& desc);
 // rank and statically known dimensions are matched with the runtime
 // dimensions).
 Error VerifyMemrefOperand(mlir::MemRefType type, MemrefDesc memref);
+Error VerifyMemrefOperand(mlir::UnrankedTensorType type, MemrefDesc memref);
 Error VerifyMemrefOperand(mlir::RankedTensorType type, MemrefDesc memref);
 
 // Converts tfrt Tensor to the Memref descriptor if concrete Tensor type is
@@ -219,45 +205,182 @@ Expected<MemrefDesc> ConvertTensorToMemrefDesc(const Tensor& tensor);
 // Conversions from compiled kernel results to the TFRT AsyncValues.
 //----------------------------------------------------------------------------//
 
+// Return value converter is responsible for taking the value returned from the
+// compiled function, and converting it to the AsyncValue. Implementation (see
+// below) is relying on user defined set of conversion functions.
+class ReturnValueConverterBase {
+ public:
+  explicit ReturnValueConverterBase(RemainingResults results);
+  virtual ~ReturnValueConverterBase();
+
+  // Converts value `ret` of type `type` returned from the compiled function at
+  // `result_index` return position using registered conversion functions, and
+  // emplaces the result async value. If the conversion failed returns a failure
+  // and sets the result async value to error.
+  virtual mlir::LogicalResult ReturnValue(unsigned result_index,
+                                          mlir::Type type, void* ret) const = 0;
+
+  // Forward error to all remaining results.
+  virtual void EmitErrors(RCReference<ErrorAsyncValue>& error) const;
+
+ protected:
+  RemainingResults results() const { return results_; }
+
+ private:
+  RemainingResults results_;
+};
+
+// Return value converter class allows to register custom functions for
+// converting compiled kernel execution results to returned async values.
+template <typename ConversionContext>
+class ReturnValueConverter : public ReturnValueConverterBase {
+  static_assert(!std::is_void<ConversionContext>::value,
+                "Conversion context can't be void");
+
+ public:
+  explicit ReturnValueConverter(RemainingResults results)
+      : ReturnValueConverter(results, std::make_unique<ConversionContext>()) {}
+
+  ReturnValueConverter(RemainingResults results,
+                       std::unique_ptr<ConversionContext> context)
+      : ReturnValueConverterBase(results), context_(std::move(context)) {
+    AddConversion(UnsupportedReturnType);
+  }
+
+  ~ReturnValueConverter() override = default;
+
+  mlir::LogicalResult ReturnValue(unsigned result_index, mlir::Type type,
+                                  void* ret) const final {
+    for (auto& convert : llvm::reverse(conversion_callbacks_)) {
+      auto converted = convert(*context_, results(), result_index, type, ret);
+      if (mlir::succeeded(converted)) return mlir::success();
+    }
+    return mlir::failure();
+  }
+
+  // Adds a conversion function to this converter. Conversion callback must be
+  // convertible to the `ConversionCallbackFn` function type:
+  //
+  //   mlir::LogicalResult(const ConversionContext&, RemainingResults, unsigned,
+  //                       mlir::Type, void*)
+  //
+  // Conversion function must return `success` if it successfully handled the
+  // return type and set the result async value. If conversion function returns
+  // `failure` converter will try the next conversion function.
+  //
+  // When attempting to convert a retuned value via 'ReturnValue', the most
+  // recently added conversions will be invoked first.
+  template <typename FnT>
+  void AddConversion(FnT&& callback) {
+    conversion_callbacks_.emplace_back(std::forward<FnT>(callback));
+  }
+
+  ConversionContext& context() { return *context_; }
+
+  // Transfers the ownership of the conversion context from this converter to
+  // the caller. It is the responsibility of the caller to extend the lifetime
+  // of the conversion context if conversion function accesses it and can be
+  // executed asynchronously when async result will become available (for
+  // example see `ReturnAsyncStridedMemref` implemented below).
+  std::unique_ptr<ConversionContext> TakeConversionContext() {
+    return std::move(context_);
+  }
+
+  ReturnValueConverter(ReturnValueConverter&&) = default;
+  ReturnValueConverter& operator=(ReturnValueConverter&&) = default;
+
+ private:
+  using ConversionCallbackFn = llvm::function_ref<mlir::LogicalResult(
+      const ConversionContext&, RemainingResults, unsigned, mlir::Type, void*)>;
+
+  // If result type was not matched by any of the user defined conversion
+  // functions we return an error to the caller.
+  static mlir::LogicalResult UnsupportedReturnType(const ConversionContext& ctx,
+                                                   RemainingResults results,
+                                                   unsigned result_index,
+                                                   mlir::Type t, const void*) {
+    results.EmitErrorAt(result_index, StrCat("unsupported return type: ", t));
+    return mlir::failure();
+  }
+
+  std::unique_ptr<ConversionContext> context_;
+  SmallVector<ConversionCallbackFn, 4> conversion_callbacks_;
+};
+
+// -------------------------------------------------------------------------- //
+// Default conversion functions that do not require conversion context.
+// -------------------------------------------------------------------------- //
+
+namespace internal {
+
 // Converts returned values of `async::TokenType` type to the async chains.
 mlir::LogicalResult ReturnAsyncToken(RemainingResults results,
                                      unsigned result_index, mlir::Type type,
                                      void* result_ptr);
 
+// Following functions always construct a new tensor for the returned memref.
+// This is not correct in general, because returned memref can be one of the
+// original operands or global constant memref. These function must be used only
+// when it is guaranteed that the compiled region will always allocate new
+// memrefs for the results.
+
 // Converts returned values of `async<memref<...>>` type to the async values
-// of DenseHostTensor type.
+// of newly constructed DenseHostTensors.
 mlir::LogicalResult ReturnAsyncMemrefAsDenseHostTensor(RemainingResults results,
                                                        unsigned result_index,
                                                        mlir::Type type,
                                                        void* result_ptr);
 
-// Converts returned values of `memref<...>` type to the async values of
-// DenseHostTensor type.
+// Converts returned values of `memref<...>` type to the async values of newly
+// constructed DenseHostTensors.
 mlir::LogicalResult ReturnMemrefAsDenseHostTensor(RemainingResults results,
                                                   unsigned result_index,
                                                   mlir::Type type,
                                                   void* result_ptr);
 
+}  // namespace internal
+
+#define DECLARE_CONTEXT_ADAPTOR(NAME)                               \
+  template <typename ConversionContext>                             \
+  static mlir::LogicalResult NAME(                                  \
+      const ConversionContext&, RemainingResults results,           \
+      unsigned result_index, mlir::Type type, void* result_ptr) {   \
+    return internal::NAME(results, result_index, type, result_ptr); \
+  }
+
+DECLARE_CONTEXT_ADAPTOR(ReturnAsyncToken)
+DECLARE_CONTEXT_ADAPTOR(ReturnAsyncMemrefAsDenseHostTensor)
+DECLARE_CONTEXT_ADAPTOR(ReturnMemrefAsDenseHostTensor)
+
+#undef DECLARE_CONTEXT_ADAPTOR
+
+// -------------------------------------------------------------------------- //
+
 // Converts returned memref values to Tensors using user provided Converter
 // that must implement this concept:
 //
 // struct ConvertMemrefToTensor {
-//   using ResultType = MyTensorType;  // must be movable
+//   using ResultType        = MyTensorType;           // must be movable
+//   using ConversionContext = ConversionContextType;  // must be movable
 //
 //   template <typename T, int rank>
-//   static MyTensorType Convert(void* memref_ptr) {
+//   static MyTensorType Convert(const ConversionContext&, void* memref_ptr) {
 //     auto* memref = static_cast<StridedMemRefType<T, rank>*>(memref_ptr);
 //     return MyTensorType>(memref.basePtr, memref.data, ...);
 //   }
 // };
 //
-template <typename Converter>
-mlir::LogicalResult ReturnStridedMemref(RemainingResults results,
+template <typename Converter,
+          typename ResultType = typename Converter::ResultType,
+          typename ConversionContext = typename Converter::ConversionContext>
+mlir::LogicalResult ReturnStridedMemref(const ConversionContext& ctx,
+                                        RemainingResults results,
                                         unsigned result_index, mlir::Type type,
                                         void* result_ptr) {
-  using ResultType = typename Converter::ResultType;
   static_assert(std::is_move_constructible<ResultType>::value,
                 "Conversion result type must be move constructible");
+  static_assert(std::is_move_constructible<ConversionContext>::value,
+                "Conversion context type must be move constructible");
 
   // Check if the type is a valid memref.
   auto memref = type.dyn_cast<mlir::MemRefType>();
@@ -271,7 +394,7 @@ mlir::LogicalResult ReturnStridedMemref(RemainingResults results,
     auto convert_and_emplace = [&](auto rank_tag) {
       constexpr int rank = decltype(rank_tag)::value;
       results.EmplaceAt<ResultType>(
-          result_index, Converter::template Convert<T, rank>(result_ptr));
+          result_index, Converter::template Convert<T, rank>(ctx, result_ptr));
     };
 
     if (rank == 0)
@@ -297,11 +420,13 @@ mlir::LogicalResult ReturnStridedMemref(RemainingResults results,
   // Dispatch based on the memref element type.
   auto element_type = memref.getElementType();
 
-  // TODO(ezhulenev): Add support for all data types.
+  // TODO(ezhulenev): Implement type dispatching to connect MLIR with TFRT.
   if (element_type.isF32()) {
     rank_dispatch(float{});
   } else if (element_type.isInteger(32)) {
     rank_dispatch(int32_t{});
+  } else if (element_type.isInteger(64)) {
+    rank_dispatch(int64_t{});
   } else {
     results.EmitErrorAt(
         result_index,
@@ -316,23 +441,30 @@ namespace internal {
 // Adaptor that creates a function compatible with `ExtractAsyncValue` from
 // the `Converter` concept compatible with `ReturnStridedMemref`.
 template <typename Converter, typename T, int rank>
-void Emplace(void* memref_ptr, AsyncValue* dst) {
+void Emplace(void* memref_ptr, AsyncValue* dst, void* context) {
   using ResultType = typename Converter::ResultType;
-  dst->emplace<ResultType>(Converter::template Convert<T, rank>(memref_ptr));
+  using ConversionContext = typename Converter::ConversionContext;
+
+  dst->emplace<ResultType>(Converter::template Convert<T, rank>(
+      *reinterpret_cast<const ConversionContext*>(context), memref_ptr));
 }
 
 }  // namespace internal
 
 // Converts returned async memref values to Tensors using user provided
 // Converter that must compatible with `ReturnStridedMemref` define above.
-template <typename Converter>
-mlir::LogicalResult ReturnAsyncStridedMemref(RemainingResults results,
+template <typename Converter,
+          typename ResultType = typename Converter::ResultType,
+          typename ConversionContext = typename Converter::ConversionContext>
+mlir::LogicalResult ReturnAsyncStridedMemref(const ConversionContext& ctx,
+                                             RemainingResults results,
                                              unsigned result_index,
                                              mlir::Type type,
                                              void* result_ptr) {
-  using ResultType = typename Converter::ResultType;
   static_assert(std::is_move_constructible<ResultType>::value,
                 "Conversion result type must be move constructible");
+  static_assert(std::is_move_constructible<ConversionContext>::value,
+                "Conversion context type must be move constructible");
 
   auto value_type = type.dyn_cast<mlir::async::ValueType>();
   if (!value_type) return mlir::failure();
@@ -355,18 +487,21 @@ mlir::LogicalResult ReturnAsyncStridedMemref(RemainingResults results,
     using T = decltype(type_tag);
     int64_t rank = memref.getRank();
 
+    // Pass an opaque pointer to the operands context to the emplace function.
+    void* ptr = const_cast<void*>(reinterpret_cast<const void*>(&ctx));
+
     if (rank == 0)
-      ExtractAsyncValue(value, dst(), internal::Emplace<Converter, T, 0>);
+      ExtractAsyncValue(value, dst(), ptr, internal::Emplace<Converter, T, 0>);
     else if (rank == 1)
-      ExtractAsyncValue(value, dst(), internal::Emplace<Converter, T, 1>);
+      ExtractAsyncValue(value, dst(), ptr, internal::Emplace<Converter, T, 1>);
     else if (rank == 2)
-      ExtractAsyncValue(value, dst(), internal::Emplace<Converter, T, 2>);
+      ExtractAsyncValue(value, dst(), ptr, internal::Emplace<Converter, T, 2>);
     else if (rank == 3)
-      ExtractAsyncValue(value, dst(), internal::Emplace<Converter, T, 3>);
+      ExtractAsyncValue(value, dst(), ptr, internal::Emplace<Converter, T, 3>);
     else if (rank == 4)
-      ExtractAsyncValue(value, dst(), internal::Emplace<Converter, T, 4>);
+      ExtractAsyncValue(value, dst(), ptr, internal::Emplace<Converter, T, 4>);
     else if (rank == 5)
-      ExtractAsyncValue(value, dst(), internal::Emplace<Converter, T, 5>);
+      ExtractAsyncValue(value, dst(), ptr, internal::Emplace<Converter, T, 5>);
     else
       // TODO(ezhulenev): Because ExtractAsyncValue takes a llvm::function_ref
       // we can't pass a runtime arguments to emplace functions via lambda
@@ -374,6 +509,11 @@ mlir::LogicalResult ReturnAsyncStridedMemref(RemainingResults results,
       // this will lead to use after free. Consider adding an std::function
       // alternative for ranks higher then 5? Lambdas with small captures should
       // be stack allocated anyway, however it is implementation defined.
+      //
+      // TODO(ezhulenev): Another alternative is to pass the desired result
+      // type after conversion via the conversion context. Emplace function can
+      // query all the information it needs from the conversion context, e.g.
+      // expected result type rank and data type.
       results.EmitErrorAt(result_index,
                           StrCat("unsupported returned memref rank: ", rank));
   };
@@ -390,45 +530,6 @@ mlir::LogicalResult ReturnAsyncStridedMemref(RemainingResults results,
   return mlir::success();
 }
 
-// Return value converter class allows to register custom functions for
-// converting compiled kernel execution results to returned async values.
-class ReturnValueConverter {
- public:
-  explicit ReturnValueConverter(RemainingResults results);
-
-  // Converts value `ret` of type `type` returned from the compiled function at
-  // `result_index` return position using registered conversion functions, and
-  // emplaces the result async value. If the conversion failed returns a failure
-  // and sets the result async value to error.
-  mlir::LogicalResult ReturnValue(unsigned result_index, mlir::Type type,
-                                  void* ret) const;
-
-  // Forward error to all remaining results.
-  void EmitErrors(RCReference<ErrorAsyncValue>& error);
-
-  // Adds a conversion function to this converter. Conversion callback must be
-  // convertible to the `ConversionCallbackFn` function type:
-  //   mlir::LogicalResult(RemainingResults, unsigned, mlir::Type, void*)
-  //
-  // Conversion function must return `success` if it successfully handled the
-  // return type and set the result async value. If conversion function returns
-  // `failure` converter will try the next conversion function.
-  //
-  // When attempting to convert a retuned value via 'ReturnValue', the most
-  // recently added conversions will be invoked first.
-  template <typename FnT>
-  void AddConversion(FnT&& callback) {
-    conversion_callbacks_.emplace_back(std::forward<FnT>(callback));
-  }
-
- private:
-  using ConversionCallbackFn = llvm::function_ref<mlir::LogicalResult(
-      RemainingResults, unsigned, mlir::Type, void*)>;
-
-  RemainingResults results_;
-  SmallVector<ConversionCallbackFn, 4> conversion_callbacks_;
-};
-
 //----------------------------------------------------------------------------//
 // Helper functions for handling errors at runtime.
 //----------------------------------------------------------------------------//
@@ -439,7 +540,7 @@ void EmitErrors(RemainingResults results, Error error,
 
 // Constructs error async value from the `error` and returns it for all results.
 // Returns the original error to the caller.
-Error EmitErrors(ReturnValueConverter results, Error error,
+Error EmitErrors(const ReturnValueConverterBase& results, Error error,
                  const ExecutionContext& exec_ctx);
 
 //----------------------------------------------------------------------------//
@@ -482,14 +583,14 @@ class Executable {
 
   // Converts returned values owned by the callframe using provided value
   // converter. If result conversion fails emits error async value.
-  Error ReturnResults(const ReturnValueConverter& results,
+  Error ReturnResults(const ReturnValueConverterBase& results,
                       CallFrame* call_frame) const;
 
   // Executes compiled function with given operands. If operands passed at
   // runtime are not compatible with the compiled function signature, allocates
   // error async values for each returned value.
   Error Execute(ArrayRef<MemrefDesc> operands,
-                const ReturnValueConverter& results,
+                const ReturnValueConverterBase& results,
                 const ExecutionContext& exec_ctx) const;
 
   // Executes compiled function using user provided call frame.
@@ -551,23 +652,54 @@ class Executable {
 // JitExecutable to manage multiple compiled executables.
 //----------------------------------------------------------------------------//
 
-// JitExecutable owns a default executable compiled from the MLIR module (if it
-// does not require to be specialized), and orchestrates on-demand
-// re-compilation for specific argument shapes and values.
+// Constraints on what operand information must be available at compile time in
+// order to successfully compile the executable:
+//
+//   `rank`  : operand must have statically known rank.
+//   `shape` : operand must have statically known shape.
+//   `value` : operand must have statically known value, and such operands
+//             replaced with constants inside the compiled function body and
+//             removed from the compiled function signature.
+//
+// If JitExecutable entrypoint function signature can't resolve all operands
+// constraints, then default executable will not be available, and the client
+// must compile a specialized version for the given operands at runtime.
+enum class OperandConstraint {
+  // Constraint was resolved based on the static information in the function
+  // signature type or it was never specified by the operand attribute.
+  kResolved = 0,
+  kRank = 1,
+  kShape = 2,
+  kValue = 3
+};
+
+// Resolve operand constraint based on the operand type, if constraint is fully
+// satisfied by the type, returns `kResolved`.
+Expected<OperandConstraint> ResolveOperandConstraint(
+    OperandConstraint operand_constraint, mlir::Type operand_type);
+
+// JitExecutable owns a default executable compiled from the MLIR module (if
+// operands constraints allow that), and orchestrates on-demand re-compilation
+// for specific argument ranks, shapes or values depending on the operands
+// constraints.
 class JitExecutable {
  public:
-  static constexpr const char* const kSpecializeShape =
-      "cpurt.specialize.shape";
-  static constexpr const char* const kSpecializeValue =
-      "cpurt.specialize.value";
+  static constexpr const char* const kConstraint = "cpurt.constraint";
 
   static Expected<JitExecutable> Instantiate(
       string_view mlir_module, string_view entrypoint,
       const CompilationOptions& compilation_opts);
 
-  // Returns default executable that accepts all compatible operands (operands
-  // rank and all static dimensions should match the operands).
+  // Returns entrypoint operands constraints after resolving them using the
+  // statically known information in the entrypoint function signature.
+  ArrayRef<OperandConstraint> constraints() const;
+
+  // Returns default executable that accepts all compatible operands
+  // (operands rank and all static dimensions should match the operands).
   const Executable* DefaultExecutable() const;
+
+  // Returns true if default executable is available.
+  bool HasDefaultExecutable() const;
 
   // Returns an executable that may be specialized for the operands shape or
   // values. Can return default executable if no specialization is required, or
@@ -589,6 +721,7 @@ class JitExecutable {
  private:
   JitExecutable(string_view mlir_module, string_view entrypoint,
                 CompilationOptions compilation_opts,
+                ArrayRef<OperandConstraint> constraints,
                 Optional<Executable> default_executable = {});
 
   // We do not use Expected<Executable> here because we need a mechanism to
@@ -617,6 +750,14 @@ class JitExecutable {
   std::string mlir_module_;
   std::string entrypoint_;
   CompilationOptions compilation_opts_;
+
+  // Entrypoint operands constraints after resolving them using the statically
+  // known information in the entrypoint function signature. If constraint
+  // specified by the argument attribute known to be statically satisfied by the
+  // operand type (e.g. rank constraint with an operand of statically known
+  // rank), then the constraint value for that operand will be updated to
+  // `kResolved`.
+  llvm::SmallVector<OperandConstraint> constraints_;
 
   // Default executable that was not specialized to any of the arguments.
   Optional<Executable> default_executable_;

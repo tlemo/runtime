@@ -60,13 +60,13 @@ ReturnMultipleResults(GpuDispatchContext* dctx,
                       const TensorMetadata& result_md0,
                       const TensorMetadata& result_md1) {
   llvm::Expected<RCReference<GpuCrtBuffer>> buffer_or_error0 =
-      dctx->allocator()->Allocate(
+      dctx->allocator()->AllocateBuffer(
           /*size=*/result_md0.GetHostSizeInBytes(), dctx->stream());
   if (!buffer_or_error0) return buffer_or_error0.takeError();
   RCReference<GpuCrtBuffer> buffer0 = std::move(*buffer_or_error0);
 
   llvm::Expected<RCReference<GpuCrtBuffer>> buffer_or_error1 =
-      dctx->allocator()->Allocate(
+      dctx->allocator()->AllocateBuffer(
           /*size=*/result_md1.GetHostSizeInBytes(), dctx->stream());
   if (!buffer_or_error1) return buffer_or_error1.takeError();
   RCReference<GpuCrtBuffer> buffer1 = std::move(*buffer_or_error1);
@@ -96,16 +96,16 @@ static llvm::Expected<DenseGpuTensor> CreateDenseTensorOp(
   }
 
   auto values = attrs.GetRawAsserting("values");
-  if (!values.IsArray() || values.array_size == 1) {
+  if (!values.IsArray() || values.element_count == 1) {
     switch (result_md.dtype.kind()) {
       default:
         assert(0 && "invalid result_md dtype");
-#define DTYPE_NUMERIC(ENUM)                                            \
-  case DType::ENUM: {                                                  \
-    using HostType = TypeForDTypeKind<DType::ENUM>;                    \
-    auto begin = static_cast<HostType*>(host_buffer->data());          \
-    auto end = begin + result_md.shape.GetNumElements();               \
-    std::fill(begin, end, *static_cast<const HostType*>(values.data)); \
+#define DTYPE_NUMERIC(ENUM)                                                 \
+  case DType::ENUM: {                                                       \
+    using HostType = TypeForDTypeKind<DType::ENUM>;                         \
+    auto begin = static_cast<HostType*>(host_buffer->data());               \
+    auto end = begin + result_md.shape.GetNumElements();                    \
+    std::fill(begin, end, *static_cast<const HostType*>(values.GetData())); \
   } break;
 #include "tfrt/dtype/dtype.def"
     }

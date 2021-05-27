@@ -27,7 +27,9 @@
 
 include "tfrt/gpu/kernels/gpu_ops_base.td"
 
-def GPU_SolverHandleType : GPU_Type<"solver_handle">;
+def GPU_SolverHandleType : GPU_Type<"SolverHandle"> {
+  let mnemonic = "solver.handle";
+}
 def GPU_AnySolverDataType : AnyTypeOf<[AnyFloat, AnyComplex, AnySignedInteger,
                                    AnyUnsignedInteger]>;
 
@@ -37,7 +39,7 @@ def SolverDnCreateOp : GPU_Op<"solver.create"> {
 
     This will be explicitly passed to every subsequent SOLVER library call.
   }];
-  let arguments = (ins GPU_StreamType, TFRT_ChainType);
+  let arguments = (ins GPU_StreamType);
   let results = (outs GPU_SolverHandleType);
 }
 

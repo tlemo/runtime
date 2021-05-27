@@ -23,6 +23,7 @@
 #include "tfrt/host_context/value.h"
 #include "tfrt/tensor/conversion_registry.h"
 #include "tfrt/tensor/host_tensor.h"
+#include "tfrt/tensor/tensor_metadata.h"
 
 namespace tfrt {
 class HostContext;
@@ -34,6 +35,8 @@ void RegisterDenseHostTensorConversionFn(TensorConversionFnRegistry* registry);
 class DenseHostTensor final : public HostTensor,
                               public TensorTraits<DenseHostTensor> {
  public:
+  DenseHostTensor() = default;
+
   DenseHostTensor(const TensorMetadata& metadata, RCReference<HostBuffer> data)
       : HostTensor(metadata), data_(std::move(data)) {}
 
@@ -55,6 +58,15 @@ class DenseHostTensor final : public HostTensor,
     return CreateUninitialized(TensorMetadata(GetDType<T>(), shape), host);
   }
 
+  template <typename T>
+  static llvm::Optional<DenseHostTensor> CreateScalar(T value,
+                                                      HostContext* host) {
+    auto dht_or = CreateUninitialized(TensorMetadata(GetDType<T>(), {}), host);
+    if (!dht_or.hasValue()) return dht_or;
+    *dht_or.getValue().data<T>() = value;
+    return dht_or;
+  }
+
   // Make an AsyncValueRef<DenseHostTensor> with kConstructed state. This
   // returns an empty (default constructed) AsyncValueRef<T> on allocation
   // failure.
@@ -69,6 +81,18 @@ class DenseHostTensor final : public HostTensor,
   void* data() {
     assert(data_ && "dereferencing a null host tensor");
     return data_->data();
+  }
+
+  template <typename DType>
+  const DType* data() const {
+    assert(GetDType<DType>() == dtype() && "Incorrect dtype for tensor");
+    return reinterpret_cast<const DType*>(data());
+  }
+
+  template <typename DType>
+  DType* data() {
+    assert(GetDType<DType>() == dtype() && "Incorrect dtype for tensor");
+    return reinterpret_cast<DType*>(data());
   }
 
   const RCReference<HostBuffer>& buffer() const { return data_; }
@@ -104,6 +128,16 @@ class DenseHostTensor final : public HostTensor,
 // allocation. This limits the size of DenseHostTensor to at most 56 bytes.
 static_assert(Value::IsInPlace<DenseHostTensor>(),
               "DenseHostTensor should not cause a heap allocation in Value.");
+
+// Compares the metadata and underlying byte buffers for equality. Please see
+// `TensorApproxEqual` for tensors with floating point numbers.
+bool operator==(const DenseHostTensor& a, const DenseHostTensor& b);
+
+inline bool operator!=(const DenseHostTensor& a, const DenseHostTensor& b) {
+  return !(a == b);
+}
+
+std::ostream& operator<<(std::ostream& o, const DenseHostTensor& dht);
 
 }  // namespace tfrt
 

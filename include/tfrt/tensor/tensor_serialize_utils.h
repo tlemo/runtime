@@ -24,8 +24,9 @@
 #include <cstdint>
 
 #include "llvm/ADT/ArrayRef.h"
+#include "tfrt/bef/bef_encoding.h"
+#include "tfrt/bef_converter/bef_attr_encoder.h"
 #include "tfrt/host_context/host_buffer.h"
-#include "tfrt/support/bef_encoding.h"
 #include "tfrt/support/forward_decls.h"
 #include "tfrt/tensor/dense_view.h"
 #include "tfrt/tensor/tensor_metadata.h"
@@ -37,8 +38,8 @@ class HostContext;
 class DenseAttr;
 
 // DenseHostTensor to DenseAttr.
-std::vector<uint8_t> SerializeDenseHostTensorToDenseAttr(
-    const DenseHostTensor& dht);
+size_t SerializeDenseHostTensorToDenseAttr(const DenseHostTensor& dht,
+                                           BefAttrEncoder* encoder);
 
 // DenseAttr to DenseHostTensor.
 llvm::Expected<DenseHostTensor> DeserializeDenseHostTensorFromDenseAttr(

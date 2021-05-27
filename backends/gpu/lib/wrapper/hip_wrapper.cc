@@ -15,19 +15,16 @@
 // Thin wrapper around the HIP API adding llvm::Error and explicit context.
 #include "tfrt/gpu/wrapper/hip_wrapper.h"
 
-#include "llvm/Support/Errc.h"
-#include "llvm/Support/Error.h"
 #include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/raw_ostream.h"
 #include "tfrt/gpu/wrapper/hip_stub.h"
-#include "tfrt/gpu/wrapper/wrapper.h"
 #include "wrapper_detail.h"
 
 namespace tfrt {
 namespace gpu {
 namespace wrapper {
 
-template void internal::LogResult(llvm::raw_ostream&, hipError_t);
+template llvm::raw_ostream& internal::operator<<(llvm::raw_ostream&,
+                                                 const ErrorData<hipError_t>&);
 
 llvm::raw_ostream& operator<<(llvm::raw_ostream& os, hipError_t error) {
   const char* msg = hipGetErrorName(error);
@@ -143,6 +140,16 @@ llvm::Error HipDevicePrimaryCtxRelease(Device device) {
   // Releasing the primary context does not change the current context, but
   // decrements the internal reference count and deactivates it iff zero.
   kContextTls.hip_may_skip_set_ctx = false;
+#ifndef NDEBUG
+  auto state = HipDevicePrimaryCtxGetState(device);
+  if (!state) return state.takeError();
+  if (!state->active) {
+    auto context = HipDevicePrimaryCtxRetain(device);
+    if (!context) return context.takeError();
+    RETURN_IF_ERROR(hipDevicePrimaryCtxRelease(ToRocm(device)));
+    return CheckNoDanglingResources(context->release());
+  }
+#endif
   return llvm::Error::success();
 }
 
@@ -155,7 +162,15 @@ llvm::Error HipDevicePrimaryCtxReset(Device device) {
       if (kContextTls.hip_ctx == context) return has_instance;
     }
   }
-  return TO_ERROR(hipDevicePrimaryCtxReset(ToRocm(device)));
+  Context context;
+#ifndef NDEBUG
+  auto context_or = HipDevicePrimaryCtxRetain(device);
+  if (!context_or) return context_or.takeError();
+  context = context_or->release();
+  RETURN_IF_ERROR(hipDevicePrimaryCtxRelease(ToRocm(device)));
+#endif
+  RETURN_IF_ERROR(hipDevicePrimaryCtxReset(ToRocm(device)));
+  return CheckNoDanglingResources(context);
 }
 
 llvm::Expected<ContextState> HipDevicePrimaryCtxGetState(Device device) {
@@ -194,7 +209,7 @@ llvm::Error HipCtxDestroy(hipCtx_t context) {
     RETURN_IF_ERROR(hipCtxGetCurrent(&kContextTls.hip_ctx));
     kContextTls.hip_may_skip_set_ctx = false;
   }
-  return llvm::Error::success();
+  return CheckNoDanglingResources(context);
 }
 
 llvm::Expected<CurrentContext> HipCtxGetCurrent() {
@@ -252,6 +267,7 @@ llvm::Expected<OwningStream> HipStreamCreate(CurrentContext current,
   CheckHipContext(current);
   hipStream_t stream;
   RETURN_IF_ERROR(hipStreamCreateWithFlags(&stream, flags));
+  NotifyResourceCreated(ResourceType::kStream, stream);
   return OwningStream(stream);
 }
 
@@ -261,12 +277,15 @@ llvm::Expected<OwningStream> HipStreamCreate(CurrentContext current,
   CheckHipContext(current);
   hipStream_t stream;
   RETURN_IF_ERROR(hipStreamCreateWithPriority(&stream, flags, priority));
+  NotifyResourceCreated(ResourceType::kStream, stream);
   return OwningStream(stream);
 }
 
 llvm::Error HipStreamDestroy(hipStream_t stream) {
   if (stream == nullptr) return llvm::Error::success();
-  return TO_ERROR(hipStreamDestroy(stream));
+  RETURN_IF_ERROR(hipStreamDestroy(stream));
+  NotifyResourceDestroyed(stream);
+  return llvm::Error::success();
 }
 
 llvm::Expected<int> HipStreamGetPriority(hipStream_t stream) {
@@ -303,12 +322,15 @@ llvm::Expected<OwningEvent> HipEventCreate(CurrentContext current,
   CheckHipContext(current);
   hipEvent_t event;
   RETURN_IF_ERROR(hipEventCreateWithFlags(&event, flags));
+  NotifyResourceCreated(ResourceType::kEvent, event);
   return OwningEvent(event);
 }
 
 llvm::Error HipEventDestroy(hipEvent_t event) {
   if (event == nullptr) return llvm::Error::success();
-  return TO_ERROR(hipEventDestroy(event));
+  RETURN_IF_ERROR(hipEventDestroy(event));
+  NotifyResourceDestroyed(event);
+  return llvm::Error::success();
 }
 
 llvm::Error HipEventRecord(hipEvent_t event, hipStream_t stream) {
@@ -338,12 +360,22 @@ llvm::Expected<DeviceMemory<void>> HipMemAlloc(CurrentContext current,
                                                size_t size_bytes) {
   CheckHipContext(current);
   hipDeviceptr_t ptr;
-  RETURN_IF_ERROR(hipMalloc(&ptr, size_bytes));
+  if (auto error = TO_ERROR(hipMalloc(&ptr, size_bytes))) {
+    return llvm::handleErrors(std::move(error),
+                              [&](std::unique_ptr<ErrorInfo<hipError_t>> info) {
+                                return GetResult(*info) == hipErrorOutOfMemory
+                                           ? MakeOomError(current, size_bytes)
+                                           : llvm::Error(std::move(info));
+                              });
+  }
+  NotifyResourceCreated(ResourceType::kDeviceMemory, ptr);
   return DeviceMemory<void>({ptr, Platform::ROCm});
 }
 
 llvm::Error HipMemFree(Pointer<void> pointer) {
-  return TO_ERROR(hipFree(ToRocm(pointer)));
+  RETURN_IF_ERROR(hipFree(ToRocm(pointer)));
+  NotifyResourceDestroyed(ToRocm(pointer));
+  return llvm::Error::success();
 }
 
 llvm::Expected<HostMemory<void>> HipMemHostAlloc(CurrentContext current,
@@ -352,11 +384,14 @@ llvm::Expected<HostMemory<void>> HipMemHostAlloc(CurrentContext current,
   CheckHipContext(current);
   void* ptr;
   RETURN_IF_ERROR(hipHostMalloc(&ptr, size_bytes, flags));
+  NotifyResourceCreated(ResourceType::kHostMemory, ptr);
   return HostMemory<void>({ptr, Platform::ROCm});
 }
 
 llvm::Error HipMemHostFree(Pointer<void> pointer) {
-  return TO_ERROR(hipHostFree(ToRocm(pointer)));
+  RETURN_IF_ERROR(hipHostFree(ToRocm(pointer)));
+  NotifyResourceDestroyed(ToRocm(pointer));
+  return llvm::Error::success();
 }
 
 llvm::Expected<RegisteredMemory<void>> HipMemHostRegister(
@@ -364,11 +399,14 @@ llvm::Expected<RegisteredMemory<void>> HipMemHostRegister(
     hipHostRegisterFlags_t flags) {
   CheckHipContext(current);
   RETURN_IF_ERROR(hipHostRegister(ptr, size_bytes, flags));
+  NotifyResourceCreated(ResourceType::kRegisteredMemory, ptr);
   return RegisteredMemory<void>({ptr, Platform::ROCm});
 }
 
 llvm::Error HipMemHostUnregister(Pointer<void> pointer) {
-  return TO_ERROR(hipHostUnregister(ToRocm(pointer)));
+  RETURN_IF_ERROR(hipHostUnregister(ToRocm(pointer)));
+  NotifyResourceDestroyed(ToRocm(pointer));
+  return llvm::Error::success();
 }
 
 llvm::Expected<DeviceMemory<void>> HipMemAllocManaged(
@@ -376,6 +414,7 @@ llvm::Expected<DeviceMemory<void>> HipMemAllocManaged(
   CheckHipContext(current);
   hipDeviceptr_t ptr;
   RETURN_IF_ERROR(hipMallocManaged(&ptr, size_bytes, flags));
+  NotifyResourceCreated(ResourceType::kDeviceMemory, ptr);
   return DeviceMemory<void>({ptr, Platform::ROCm});
 }
 
@@ -471,6 +510,7 @@ llvm::Expected<OwningModule> HipModuleLoadData(CurrentContext current,
   CheckHipContext(current);
   hipModule_t module;
   RETURN_IF_ERROR(hipModuleLoadData(&module, image));
+  NotifyResourceCreated(ResourceType::kModule, module);
   return OwningModule(module);
 }
 
@@ -482,12 +522,15 @@ llvm::Expected<OwningModule> HipModuleLoadDataEx(
   RETURN_IF_ERROR(hipModuleLoadDataEx(
       &module, image, options.size(), const_cast<hipJitOption*>(options.data()),
       const_cast<void**>(option_values.data())));
+  NotifyResourceCreated(ResourceType::kModule, module);
   return OwningModule(module);
 }
 
 llvm::Error HipModuleUnload(hipModule_t module) {
   if (module == nullptr) return llvm::Error::success();
-  return TO_ERROR(hipModuleUnload(module));
+  RETURN_IF_ERROR(hipModuleUnload(module));
+  NotifyResourceDestroyed(module);
+  return llvm::Error::success();
 }
 
 llvm::Expected<Function> HipModuleGetFunction(hipModule_t module,

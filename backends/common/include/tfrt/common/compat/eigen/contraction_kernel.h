@@ -51,8 +51,6 @@ namespace internal {
 
 // Returns `true` iff we can use custom contraction kernels. This is a runtime
 // check that uses environment variables.
-// TODO(b/152346987): Rename this back to UseCustomContractionKernels when TFRT
-// is open sourced.
 bool UseCustomContractionKernelsTFRT();
 
 // Pack a 2D block of a Tensor expression into a contiguous block of memory with
@@ -236,12 +234,12 @@ class TensorContractionBlocking<float, float, float, IndexType, sharding_type> {
     if (!UseCustomContractionKernelsTFRT()) return;
 
     // 2. And refine them to work well with mkldnn sgemm.
-    mc_ = (std::min)(m, Eigen::divup(static_cast<IndexType>(mc_ * kScaleM),
-                                     kUnrollM) *
-                            kUnrollM);
-    nc_ = (std::min)(n, Eigen::divup(static_cast<IndexType>(nc_ * kScaleN),
-                                     kUnrollN) *
-                            kUnrollN);
+    mc_ = std::min(
+        m, Eigen::divup(static_cast<IndexType>(mc_ * kScaleM), kUnrollM) *
+               kUnrollM);
+    nc_ = std::min(
+        n, Eigen::divup(static_cast<IndexType>(nc_ * kScaleN), kUnrollN) *
+               kUnrollN);
 
     // We split Kth dimensions in roughly equal slices.
     IndexType target_k_slices = (std::max)(IndexType(1), Eigen::divup(k, kc_));

@@ -15,58 +15,14 @@
 // Thin wrapper around the cuBLAS API adding llvm::Error.
 #include "tfrt/gpu/wrapper/cublas_wrapper.h"
 
-#include "llvm/Support/Errc.h"
-#include "llvm/Support/Error.h"
-#include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/raw_ostream.h"
 #include "wrapper_detail.h"
 
 namespace tfrt {
 namespace gpu {
 namespace wrapper {
 
-template void internal::LogResult(llvm::raw_ostream&, cublasStatus_t);
-
-llvm::raw_ostream& operator<<(llvm::raw_ostream& os, cublasStatus_t status) {
-  switch (status) {
-    case CUBLAS_STATUS_SUCCESS:
-      return os << "CUBLAS_STATUS_SUCCESS";
-    case CUBLAS_STATUS_NOT_INITIALIZED:
-      return os << "CUBLAS_STATUS_NOT_INITIALIZED";
-    case CUBLAS_STATUS_ALLOC_FAILED:
-      return os << "CUBLAS_STATUS_ALLOC_FAILED";
-    case CUBLAS_STATUS_INVALID_VALUE:
-      return os << "CUBLAS_STATUS_INVALID_VALUE";
-    case CUBLAS_STATUS_ARCH_MISMATCH:
-      return os << "CUBLAS_STATUS_ARCH_MISMATCH";
-    case CUBLAS_STATUS_MAPPING_ERROR:
-      return os << "CUBLAS_STATUS_MAPPING_ERROR";
-    case CUBLAS_STATUS_EXECUTION_FAILED:
-      return os << "CUBLAS_STATUS_EXECUTION_FAILED";
-    case CUBLAS_STATUS_INTERNAL_ERROR:
-      return os << "CUBLAS_STATUS_INTERNAL_ERROR";
-    case CUBLAS_STATUS_NOT_SUPPORTED:
-      return os << "CUBLAS_STATUS_NOT_SUPPORTED";
-    case CUBLAS_STATUS_LICENSE_ERROR:
-      return os << "CUBLAS_STATUS_LICENSE_ERROR";
-    default:
-      return os << llvm::formatv("cublasStatus_t({0})",
-                                 static_cast<int>(status));
-  }
-}
-
-cublasOperation_t ToCublas(BlasOperation operation) {
-  switch (operation) {
-    case BlasOperation::kNone:
-      return CUBLAS_OP_N;
-    case BlasOperation::kTranspose:
-      return CUBLAS_OP_T;
-    case BlasOperation::kConjugateTranspose:
-      return CUBLAS_OP_C;
-  }
-  llvm_unreachable(
-      StrCat("Unrecognized BlasOperation value: ", operation).c_str());
-}
+template llvm::raw_ostream& internal::operator<<(
+    llvm::raw_ostream&, const ErrorData<cublasStatus_t>&);
 
 llvm::Expected<OwningBlasHandle> CublasCreate(CurrentContext current) {
   CheckCudaContext(current);
@@ -109,6 +65,99 @@ llvm::Expected<cublasPointerMode_t> CublasGetPointerMode(
 
 llvm::Error CublasSetMathMode(cublasHandle_t handle, cublasMath_t math_type) {
   return TO_ERROR(cublasSetMathMode(handle, math_type));
+}
+
+llvm::Expected<cublasMath_t> CublasGetMathMode(cublasHandle_t handle) {
+  cublasMath_t mode;
+  RETURN_IF_ERROR(cublasGetMathMode(handle, &mode));
+  return mode;
+}
+
+llvm::Error CublasAxpyEx(CurrentContext current, cublasHandle_t handle, int n,
+                         Pointer<const void> alpha, /* host or device pointer */
+                         cudaDataType alphaType, Pointer<const void> x,
+                         cudaDataType typeX, int strideX, Pointer<void> y,
+                         cudaDataType typeY, int strideY,
+                         cudaDataType executionType) {
+  CheckCudaContext(current);
+  return TO_ERROR(cublasAxpyEx(handle, n, ToCuda(alpha), alphaType, ToCuda(x),
+                               typeX, strideX, ToCuda(y), typeY, strideY,
+                               executionType));
+}
+
+// This function is defined in cublas_stub.cc (or cublas_compat.cc for google-
+// internal builds). It is a backward compartible wrapper for the cublasGemmEx
+// to accomodate for the API change between cuBLAS v10 and v11.
+extern "C" CUBLASAPI cublasStatus_t CUBLASWINAPI cublasGemmEx_v10(
+    cublasHandle_t handle, cublasOperation_t transA, cublasOperation_t transB,
+    int m, int n, int k, const void* alpha, /* host or device pointer */
+    const void* A, cudaDataType typeA, int heightA, const void* B,
+    cudaDataType typeB, int heightB,
+    const void* beta, /* host or device pointer */
+    void* C, cudaDataType typeC, int heightC, cudaDataType computeType,
+    cublasGemmAlgo_t algo);
+
+llvm::Error CublasGemmEx(CurrentContext current, cublasHandle_t handle,
+                         cublasOperation_t transA, cublasOperation_t transB,
+                         int m, int n, int k, Pointer<const void> alpha,
+                         Pointer<const void> A, cudaDataType typeA, int heightA,
+                         Pointer<const void> B, cudaDataType typeB, int heightB,
+                         Pointer<const void> beta, Pointer<void> C,
+                         cudaDataType typeC, int heightC,
+                         cudaDataType computeType, cublasGemmAlgo_t algo) {
+  CheckCudaContext(current);
+  return TO_ERROR(cublasGemmEx_v10(
+      handle, transA, transB, m, n, k, ToCuda(alpha), ToCuda(A), typeA, heightA,
+      ToCuda(B), typeB, heightB, ToCuda(beta), ToCuda(C), typeC, heightC,
+      computeType, algo));
+}
+
+extern "C" CUBLASAPI cublasStatus_t CUBLASWINAPI cublasGemmBatchedEx_v10(
+    cublasHandle_t handle, cublasOperation_t transA, cublasOperation_t transB,
+    int m, int n, int k, const void* alpha, /* host or device pointer */
+    const void* Aarray[], cudaDataType typeA, int heightA, const void* Barray[],
+    cudaDataType typeB, int heightB,
+    const void* beta, /* host or device pointer */
+    void* Carray[], cudaDataType typeC, int heightC, int batchCount,
+    cudaDataType computeType, cublasGemmAlgo_t algo);
+
+llvm::Error CublasGemmBatchedEx(
+    CurrentContext current, cublasHandle_t handle, cublasOperation_t transA,
+    cublasOperation_t transB, int m, int n, int k, Pointer<const void> alpha,
+    llvm::ArrayRef<Pointer<const void>> Aarray, cudaDataType typeA, int heightA,
+    llvm::ArrayRef<Pointer<const void>> Barray, cudaDataType typeB, int heightB,
+    Pointer<const void> beta, llvm::ArrayRef<Pointer<void>> Carray,
+    cudaDataType typeC, int heightC, int batchCount, cudaDataType computeType,
+    cublasGemmAlgo_t algo) {
+  CheckCudaContext(current);
+  return TO_ERROR(cublasGemmBatchedEx_v10(
+      handle, transA, transB, m, n, k, ToCuda(alpha), ToCuda(Aarray).data(),
+      typeA, heightA, ToCuda(Barray).data(), typeB, heightB, ToCuda(beta),
+      ToCuda(Carray).data(), typeC, heightC, batchCount, computeType, algo));
+}
+
+extern "C" CUBLASAPI cublasStatus_t CUBLASWINAPI cublasGemmStridedBatchedEx_v10(
+    cublasHandle_t handle, cublasOperation_t transA, cublasOperation_t transB,
+    int m, int n, int k, const void* alpha, /* host or device pointer */
+    const void* A, cudaDataType typeA, int heightA, int64_t strideA,
+    const void* B, cudaDataType typeB, int heightB, int64_t strideB,
+    const void* beta, /* host or device pointer */
+    void* C, cudaDataType typeC, int heightC, int64_t strideC, int batchCount,
+    cudaDataType computeType, cublasGemmAlgo_t algo);
+
+llvm::Error CublasGemmStridedBatchedEx(
+    CurrentContext current, cublasHandle_t handle, cublasOperation_t transA,
+    cublasOperation_t transB, int m, int n, int k, Pointer<const void> alpha,
+    Pointer<const void> A, cudaDataType typeA, int heightA, int64_t strideA,
+    Pointer<const void> B, cudaDataType typeB, int heightB, int64_t strideB,
+    Pointer<const void> beta, Pointer<void> C, cudaDataType typeC, int heightC,
+    int64_t strideC, int batchCount, cudaDataType computeType,
+    cublasGemmAlgo_t algo) {
+  CheckCudaContext(current);
+  return TO_ERROR(cublasGemmStridedBatchedEx_v10(
+      handle, transA, transB, m, n, k, ToCuda(alpha), ToCuda(A), typeA, heightA,
+      strideA, ToCuda(B), typeB, heightB, strideB, ToCuda(beta), ToCuda(C),
+      typeC, heightC, strideC, batchCount, computeType, algo));
 }
 
 llvm::Error CublasSnrm2(CurrentContext current, cublasHandle_t handle, int n,
@@ -1668,79 +1717,6 @@ llvm::Error CublasZtrmm(CurrentContext current, cublasHandle_t handle,
   return TO_ERROR(cublasZtrmm_v2(handle, side, uplo, trans, diag, m, n,
                                  ToCuda(alpha), ToCuda(A), lda, ToCuda(B), ldb,
                                  ToCuda(C), ldc));
-}
-
-// Following function is defined in cublas_stub.cc
-// backward compartible wrapper for the cublasGemmEx
-// to accomodate for the API change between cuBLAS v10 and v11.
-extern "C" CUBLASAPI cublasStatus_t CUBLASWINAPI cublasGemmEx_v10(
-    cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb,
-    int m, int n, int k, const void* alpha, /* host or device pointer */
-    const void* A, cudaDataType Atype, int lda, const void* B,
-    cudaDataType Btype, int ldb, const void* beta, /* host or device pointer */
-    void* C, cudaDataType Ctype, int ldc, cudaDataType computeType,
-    cublasGemmAlgo_t algo);
-
-llvm::Error CublasGemmEx(CurrentContext current, cublasHandle_t handle,
-                         cublasOperation_t transa, cublasOperation_t transb,
-                         int m, int n, int k, Pointer<const void> alpha,
-                         Pointer<const void> A, cudaDataType Atype, int lda,
-                         Pointer<const void> B, cudaDataType Btype, int ldb,
-                         Pointer<const void> beta, Pointer<void> C,
-                         cudaDataType Ctype, int ldc, cudaDataType computeType,
-                         cublasGemmAlgo_t algo) {
-  CheckCudaContext(current);
-  return TO_ERROR(cublasGemmEx_v10(handle, transa, transb, m, n, k,
-                                   ToCuda(alpha), ToCuda(A), Atype, lda,
-                                   ToCuda(B), Btype, ldb, ToCuda(beta),
-                                   ToCuda(C), Ctype, ldc, computeType, algo));
-}
-
-extern "C" CUBLASAPI cublasStatus_t CUBLASWINAPI cublasGemmBatchedEx_v10(
-    cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb,
-    int m, int n, int k, const void* alpha, /* host or device pointer */
-    const void* Aarray[], cudaDataType Atype, int lda, const void* Barray[],
-    cudaDataType Btype, int ldb, const void* beta, /* host or device pointer */
-    void* Carray[], cudaDataType Ctype, int ldc, int batchCount,
-    cudaDataType computeType, cublasGemmAlgo_t algo);
-
-llvm::Error CublasGemmBatchedEx(
-    CurrentContext current, cublasHandle_t handle, cublasOperation_t transa,
-    cublasOperation_t transb, int m, int n, int k, Pointer<const void> alpha,
-    llvm::ArrayRef<Pointer<const void>> Aarray, cudaDataType Atype, int lda,
-    llvm::ArrayRef<Pointer<const void>> Barray, cudaDataType Btype, int ldb,
-    Pointer<const void> beta, llvm::ArrayRef<Pointer<void>> Carray,
-    cudaDataType Ctype, int ldc, int batchCount, cudaDataType computeType,
-    cublasGemmAlgo_t algo) {
-  CheckCudaContext(current);
-  return TO_ERROR(cublasGemmBatchedEx_v10(
-      handle, transa, transb, m, n, k, ToCuda(alpha), ToCuda(Aarray).data(),
-      Atype, lda, ToCuda(Barray).data(), Btype, ldb, ToCuda(beta),
-      ToCuda(Carray).data(), Ctype, ldc, batchCount, computeType, algo));
-}
-
-extern "C" CUBLASAPI cublasStatus_t CUBLASWINAPI cublasGemmStridedBatchedEx_v10(
-    cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb,
-    int m, int n, int k, const void* alpha, /* host or device pointer */
-    const void* A, cudaDataType Atype, int lda, int64_t strideA, const void* B,
-    cudaDataType Btype, int ldb, int64_t strideB,
-    const void* beta, /* host or device pointer */
-    void* C, cudaDataType Ctype, int ldc, int64_t strideC, int batchCount,
-    cudaDataType computeType, cublasGemmAlgo_t algo);
-
-llvm::Error CublasGemmStridedBatchedEx(
-    CurrentContext current, cublasHandle_t handle, cublasOperation_t transa,
-    cublasOperation_t transb, int m, int n, int k, Pointer<const void> alpha,
-    Pointer<const void> A, cudaDataType Atype, int lda, int64_t strideA,
-    Pointer<const void> B, cudaDataType Btype, int ldb, int64_t strideB,
-    Pointer<const void> beta, Pointer<void> C, cudaDataType Ctype, int ldc,
-    int64_t strideC, int batchCount, cudaDataType computeType,
-    cublasGemmAlgo_t algo) {
-  CheckCudaContext(current);
-  return TO_ERROR(cublasGemmStridedBatchedEx_v10(
-      handle, transa, transb, m, n, k, ToCuda(alpha), ToCuda(A), Atype, lda,
-      strideA, ToCuda(B), Btype, ldb, strideB, ToCuda(beta), ToCuda(C), Ctype,
-      ldc, strideC, batchCount, computeType, algo));
 }
 
 }  // namespace wrapper

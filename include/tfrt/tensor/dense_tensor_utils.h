@@ -21,22 +21,20 @@
 #include <complex>
 #include <type_traits>
 
+#include "tfrt/tensor/dense_host_tensor.h"
 #include "tfrt/tensor/dense_host_tensor_view.h"
 
 namespace tfrt {
 
 // Compares two tenors using the provided function.
 template <typename T, typename F>
-bool CompareTensors(const DHTArrayView<T> lhs, const DHTArrayView<T> rhs,
-                    F&& cmp) {
-  if (lhs.Shape() == rhs.Shape()) {
-    auto lelements = lhs.Elements();
-    auto relements = rhs.Elements();
-    assert(lelements.size() == relements.size());
-    return std::equal(lelements.begin(), lelements.end(), relements.begin(),
-                      cmp);
-  }
-  return false;
+bool TensorEqual(const DenseHostTensor& lhs, const DenseHostTensor& rhs,
+                 F&& cmp) {
+  if (lhs.metadata() != rhs.metadata()) return false;
+  DHTArrayView<T> lhs_view(&lhs);
+  DHTArrayView<T> rhs_view(&rhs);
+  assert(lhs_view.NumElements() == rhs_view.NumElements());
+  return std::equal(lhs_view.begin(), lhs_view.end(), rhs_view.begin(), cmp);
 }
 
 // Compare floating point numbers for equality within a given ULP (units in the
@@ -74,19 +72,27 @@ bool TensorElementsClose(T x, T y) {
 }
 
 template <typename T, int ULP = 2>
-bool AllElementsClose(DHTArrayView<T> lhs, DHTArrayView<T> rhs) {
-  return CompareTensors<T>(lhs, rhs, TensorElementsClose<T, ULP>);
+bool TensorApproxEqual(const DenseHostTensor& lhs, const DenseHostTensor& rhs) {
+  return TensorEqual<T>(lhs, rhs, TensorElementsClose<T, ULP>);
 }
 
 template <typename T>
-bool operator==(const DHTArrayView<T> lhs, const DHTArrayView<T> rhs) {
-  return CompareTensors<T>(lhs, rhs, [](T x, T y) { return x == y; });
+bool TensorEqual(const DenseHostTensor& lhs, const DenseHostTensor& rhs) {
+  return TensorEqual<T>(lhs, rhs, [](T x, T y) { return x == y; });
 }
 
-template <typename T>
-bool operator!=(const DHTArrayView<T> lhs, const DHTArrayView<T> rhs) {
-  return !(lhs == rhs);
-}
+// Chip is a special kind of slice. It indexes into the view at the given
+// coordinate prefix and returns a view onto the remaining dimensions.
+// It is similar to indexing into a numpy array, e.g. for a 5D ndarray A, the
+// slice A[1, 3] would return a 3D view.
+DenseHostTensor Chip(const DenseHostTensor& tensor, ArrayRef<ssize_t> dims);
+
+// Flattens a DHT into a Rank-1 DHT that will share the underlying HostBuffer.
+DenseHostTensor Flatten(const DenseHostTensor& tensor);
+
+// Copies the data of a DHT to another DHT. Returns false if the metadatas of
+// the DHTs do not match.
+LLVM_NODISCARD bool CopyTo(const DenseHostTensor& src, DenseHostTensor* dst);
 
 }  // namespace tfrt
 
