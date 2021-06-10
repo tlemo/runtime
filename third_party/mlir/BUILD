@@ -897,7 +897,9 @@ td_library(
     includes = ["include"],
     deps = [
         ":LLVMOpsTdFiles",
+        ":OpBaseTdFiles",
         ":SideEffectInterfacesTdFiles",
+        ":StdOpsTdFiles",
     ],
 )
 
@@ -1019,6 +1021,7 @@ cc_library(
         ":IR",
         ":LLVMDialect",
         ":SideEffectInterfaces",
+        ":StandardOps",
         ":VectorOps",
         "@llvm-project//llvm:Core",
         "@llvm-project//llvm:Support",
@@ -2738,23 +2741,6 @@ cc_library(
     ],
 )
 
-gentbl_cc_library(
-    name = "GPUToSPIRVIncGen",
-    strip_include_prefix = "lib/Conversion/GPUToSPIRV",
-    tbl_outs = [
-        (
-            ["-gen-rewriters"],
-            "lib/Conversion/GPUToSPIRV/GPUToSPIRV.cpp.inc",
-        ),
-    ],
-    tblgen = ":mlir-tblgen",
-    td_file = "lib/Conversion/GPUToSPIRV/GPUToSPIRV.td",
-    deps = [
-        ":GPUOpsTdFiles",
-        ":SPIRVOpsTdFiles",
-    ],
-)
-
 cc_library(
     name = "GPUToSPIRV",
     srcs = glob([
@@ -2771,7 +2757,6 @@ cc_library(
     deps = [
         ":ConversionPassIncGen",
         ":GPUDialect",
-        ":GPUToSPIRVIncGen",
         ":IR",
         ":Pass",
         ":SCFDialect",
