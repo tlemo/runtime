@@ -961,6 +961,31 @@ gentbl_cc_library(
     deps = [":ArmNeonTdFiles"],
 )
 
+cc_library(
+    name = "ArmNeon2dToIntr",
+    srcs = glob([
+        "lib/Conversion/ArmNeon2dToIntr/*.cpp",
+        "lib/Conversion/ArmNeon2dToIntr/*.h",
+    ]) + ["lib/Conversion/PassDetail.h"],
+    hdrs = glob([
+        "include/mlir/Conversion/ArmNeon2dToIntr/*.h",
+    ]),
+    includes = ["include"],
+    deps = [
+        ":ArmNeon",
+        ":ConversionPassIncGen",
+        ":IR",
+        ":MemRefDialect",
+        ":OpenACCDialect",
+        ":Pass",
+        ":SCFDialect",
+        ":StandardOps",
+        ":Support",
+        ":Transforms",
+        ":VectorOps",
+    ],
+)
+
 ##---------------------------------------------------------------------------##
 # ArmSVE dialect.
 ##---------------------------------------------------------------------------##
@@ -1697,6 +1722,7 @@ cc_library(
     includes = ["include"],
     deps = [
         ":AffineToStandard",
+        ":ArmNeon2dToIntr",
         ":AsyncToLLVM",
         ":ComplexToLLVM",
         ":ComplexToStandard",
