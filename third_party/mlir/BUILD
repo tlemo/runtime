@@ -6345,6 +6345,7 @@ td_library(
     includes = ["include"],
     deps = [
         ":CastInterfacesTdFiles",
+        ":ControlFlowInterfacesTdFiles",
         ":CopyOpInterfaceTdFiles",
         ":OpBaseTdFiles",
         ":SideEffectInterfacesTdFiles",
@@ -6402,6 +6403,7 @@ cc_library(
     ],
     includes = ["include"],
     deps = [
+        ":ControlFlowInterfaces",
         ":CopyOpInterface",
         ":IR",
         ":InferTypeOpInterface",
