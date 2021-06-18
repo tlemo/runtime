@@ -51,7 +51,7 @@ class TensorMetadata {
   bool IsInvalid() const { return dtype.IsInvalid(); }
 
   size_t GetHostSizeInBytes() const {
-    return dtype.GetHostSize() * shape.GetNumElements();
+    return GetHostSize(dtype) * shape.GetNumElements();
   }
 
   TensorShape shape;
