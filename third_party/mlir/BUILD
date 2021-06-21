@@ -2219,11 +2219,7 @@ cc_library(
             "lib/Dialect/StandardOps/IR/*.h",
             "lib/Dialect/StandardOps/Utils/*.cpp",
         ],
-    ) +
-    # TODO: Stop depending on MemRefOps.
-    [
-        "include/mlir/Dialect/MemRef/IR/MemRef.h",
-    ],
+    ),
     hdrs = glob([
         "include/mlir/Dialect/StandardOps/IR/*.h",
         "include/mlir/Dialect/StandardOps/Utils/*.h",
@@ -2234,10 +2230,7 @@ cc_library(
         ":CastOpInterfaces",
         ":CommonFolders",
         ":ControlFlowInterfaces",
-        ":CopyOpInterface",  # TODO: Stop depending on MemRefOps.
         ":IR",
-        ":MemRefBaseIncGen",  # TODO: Stop depending on MemRefOps.
-        ":MemRefOpsIncGen",  # TODO: Stop depending on MemRefOps.
         ":SideEffectInterfaces",
         ":StandardOpsIncGen",
         ":Support",
@@ -2274,7 +2267,7 @@ cc_library(
     deps = [
         ":Affine",
         ":IR",
-        ":MemRefDialect",
+        ":MemRefDialect",  # TODO: Remove dependency on MemRef dialect
         ":Pass",
         ":SCFDialect",
         ":StandardOps",
@@ -2762,6 +2755,7 @@ cc_library(
         ":IR",
         ":LLVMDialect",
         ":MathDialect",
+        ":MemRefDialect",
         ":NVVMDialect",
         ":Pass",
         ":StandardToLLVM",
