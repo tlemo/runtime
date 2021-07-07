@@ -2857,6 +2857,7 @@ cc_library(
         ":GPUToNVVMGen",
         ":GPUTransforms",
         ":IR",
+        ":LLVMCommonConversion",
         ":LLVMDialect",
         ":MathDialect",
         ":MemRefDialect",
@@ -2940,6 +2941,7 @@ cc_library(
         ":GPUDialect",
         ":GPUToROCDLTGen",
         ":GPUTransforms",
+        ":LLVMCommonConversion",
         ":MathDialect",
         ":Pass",
         ":ROCDLDialect",
@@ -2966,6 +2968,7 @@ cc_library(
         ":ConversionPassIncGen",
         ":GPUDialect",
         ":IR",
+        ":LLVMCommonConversion",
         ":LLVMDialect",
         ":Pass",
         ":SPIRVDialect",
@@ -4289,6 +4292,22 @@ alias(
 )
 
 cc_library(
+    name = "LLVMCommonConversion",
+    srcs = glob([
+        "lib/Conversion/LLVMCommon/*.cpp",
+    ]) + ["lib/Conversion/LLVMCommon/MemRefDescriptor.h"],
+    hdrs = glob(["include/mlir/Conversion/LLVMCommon/*.h"]),
+    includes = ["include"],
+    deps = [
+        ":IR",
+        ":LLVMDialect",
+        ":Support",
+        ":Transforms",
+        "@llvm-project//llvm:Core",
+    ],
+)
+
+cc_library(
     name = "StandardToLLVM",
     srcs = [
         "lib/Conversion/PassDetail.h",
@@ -4305,6 +4324,7 @@ cc_library(
         ":DataLayoutInterfaces",
         ":DialectUtils",
         ":IR",
+        ":LLVMCommonConversion",
         ":LLVMDialect",
         ":MathDialect",
         ":MemRefDialect",
@@ -5169,6 +5189,7 @@ cc_binary(
         ":GPUToSPIRV",
         ":GPUToVulkanTransforms",
         ":GPUTransforms",
+        ":LLVMCommonConversion",
         ":LLVMDialect",
         ":LLVMToLLVMIRTranslation",
         ":MemRefDialect",
@@ -6283,6 +6304,7 @@ cc_library(
     ],
     deps = [
         ":ConversionPassIncGen",
+        ":DialectUtils",
         ":IR",
         ":LinalgOps",
         ":MathDialect",
@@ -6432,6 +6454,7 @@ cc_library(
         ":ComplexDialect",
         ":ConversionPassIncGen",
         ":IR",
+        ":LLVMCommonConversion",
         ":LLVMDialect",
         ":Pass",
         ":StandardToLLVM",
