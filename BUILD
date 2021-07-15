@@ -3,7 +3,7 @@ load(":build_defs.bzl", "tfrt_cc_library", "if_google", "if_oss")
 # copybara:uncomment load("//configlang/ncl/build_defs:ncl.bzl", "ncl_test")
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
-load("@tf_runtime//third_party/mlir:tblgen.bzl", "gentbl_cc_library")
+load("@tf_runtime//third_party/mlir:tblgen.bzl", "gentbl_cc_library", "td_library")
 # copybara:uncomment load("//tools/build_defs/proto/cpp:cc_proto_library.bzl", "cc_proto_library")
 
 package(
@@ -590,7 +590,7 @@ tfrt_cc_library(
     ],
 )
 
-filegroup(
+td_library(
     name = "OpBaseTdFiles",
     srcs = [
         "include/tfrt/basic_kernels/opdefs/tfrt_base.td",
@@ -602,6 +602,18 @@ filegroup(
         "@llvm-project//mlir:include/mlir/IR/OpBase.td",
     ],
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = ["include"],
+    visibility = [":friends"],
+)
+
+td_library(
+    name = "CoreRTTdFiles",
+    srcs = [
+        "include/tfrt/core_runtime/opdefs/corert_base.td",
+        "include/tfrt/core_runtime/opdefs/corert_traits.td",
+    ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    includes = ["include"],
     visibility = [":friends"],
 )
 
@@ -633,7 +645,7 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/basic_kernels/opdefs/basic_kernels.td",
-    td_srcs = [
+    deps = [
         ":OpBaseTdFiles",
         "@llvm-project//mlir:CallInterfacesTdFiles",
         "@llvm-project//mlir:InferTypeOpInterfaceTdFiles",
@@ -696,7 +708,7 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tensor/opdefs/tensor_shape.td",
-    td_srcs = [
+    deps = [
         ":OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
@@ -718,7 +730,7 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tensor/opdefs/tensor_shape_sync.td",
-    td_srcs = [
+    deps = [
         ":OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
@@ -740,7 +752,7 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tensor/opdefs/tensor.td",
-    td_srcs = [
+    deps = [
         ":OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
@@ -762,7 +774,7 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tensor/opdefs/host_tensor.td",
-    td_srcs = [
+    deps = [
         ":OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
@@ -784,7 +796,7 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tensor/opdefs/dense_host_tensor.td",
-    td_srcs = [
+    deps = [
         ":OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
@@ -806,7 +818,7 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tensor/opdefs/dense_host_tensor_sync.td",
-    td_srcs = [
+    deps = [
         ":OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
@@ -828,7 +840,7 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tensor/opdefs/coo_host_tensor.td",
-    td_srcs = [
+    deps = [
         ":OpBaseTdFiles",
     ],
 )
@@ -885,10 +897,9 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/core_runtime/opdefs/core_runtime.td",
-    td_srcs = [
+    deps = [
+        ":CoreRTTdFiles",
         ":OpBaseTdFiles",
-        "include/tfrt/core_runtime/opdefs/corert_base.td",
-        "include/tfrt/core_runtime/opdefs/corert_traits.td",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
 )
@@ -935,10 +946,9 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/core_runtime/opdefs/sync/core_runtime.td",
-    td_srcs = [
+    deps = [
+        ":CoreRTTdFiles",
         ":OpBaseTdFiles",
-        "include/tfrt/core_runtime/opdefs/corert_traits.td",
-        "include/tfrt/core_runtime/opdefs/corert_base.td",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
 )
@@ -1086,10 +1096,10 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/test_kernels/opdefs/test_kernels.td",
-    td_srcs = [
+    deps = [
+        ":CoreRTTdFiles",
         ":OpBaseTdFiles",
         ":compiler_td_files",
-        "include/tfrt/core_runtime/opdefs/corert_traits.td",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
 )
@@ -1133,7 +1143,7 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/test_kernels/opdefs/test_kernels_sync.td",
-    td_srcs = [
+    deps = [
         ":OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
@@ -1253,7 +1263,7 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/data/opdefs/data_ops.td",
-    td_srcs = [
+    deps = [
         ":OpBaseTdFiles",
     ],
 )
@@ -1413,9 +1423,9 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/distributed_runtime/opdefs/kernels.td",
-    td_srcs = [
+    deps = [
+        ":CoreRTTdFiles",
         ":OpBaseTdFiles",
-        "@tf_runtime//:include/tfrt/core_runtime/opdefs/corert_base.td",
         "@llvm-project//mlir:SideEffectTdFiles",
     ],
 )
@@ -1467,7 +1477,7 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/compiler/opdefs/tfrt_op_interfaces.td",
-    td_srcs = [":compiler_td_files"],
+    deps = [":compiler_td_files"],
 )
 
 tfrt_cc_library(
@@ -1497,7 +1507,7 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/compiler/opdefs/tfrt_traits.td",
-    td_srcs = [":compiler_td_files"],
+    deps = [":compiler_td_files"],
 )
 
 tfrt_cc_library(
@@ -1728,9 +1738,9 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "include/tfrt/tpu/opdefs/tpu_ops.td",
-    td_srcs = [
+    deps = [
+        ":CoreRTTdFiles",
         ":OpBaseTdFiles",
-        "@tf_runtime//:include/tfrt/core_runtime/opdefs/corert_base.td",
     ],
 )
 
