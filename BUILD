@@ -617,18 +617,6 @@ td_library(
     visibility = [":friends"],
 )
 
-exports_files(
-    [
-        "include/tfrt/tensor/opdefs/host_tensor.td",
-        "include/tfrt/tensor/opdefs/tensor.td",
-        "include/tfrt/tfrt_op_base.td",
-        "include/tfrt/basic_kernels/opdefs/tfrt_base.td",
-        "include/tfrt/core_runtime/opdefs/corert_traits.td",
-        "include/tfrt/core_runtime/opdefs/corert_base.td",
-    ],
-    visibility = [":friends"],
-)
-
 gentbl_cc_library(
     name = "basic_kernels_opdefs_inc_gen",
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
@@ -1451,7 +1439,7 @@ tfrt_cc_library(
     ],
 )
 
-filegroup(
+td_library(
     name = "compiler_td_files",
     srcs = [
         "include/tfrt/compiler/opdefs/tfrt_op_interfaces.td",
