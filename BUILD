@@ -290,6 +290,7 @@ tfrt_cc_library(
 
 tfrt_cc_library(
     name = "kernel_runner",
+    testonly = True,
     srcs = [
         "lib/utils/kernel_runner.cc",
     ],
@@ -298,6 +299,7 @@ tfrt_cc_library(
     ],
     visibility = [":friends"],
     deps = [
+        ":bef_attr_encoder",
         ":hostcontext",
         ":support",
         "@llvm-project//llvm:Support",
