@@ -33,7 +33,7 @@ class TensorMetadata {
   TensorMetadata(DType dtype, const TensorShape& shape)
       : shape(shape), dtype(dtype) {}
 
-  template <typename T = int64_t>
+  template <typename T = Index>
   TensorMetadata(DType dtype, ArrayRef<T> shape) : shape(shape), dtype(dtype) {}
 
   template <typename Container>
@@ -42,9 +42,8 @@ class TensorMetadata {
 
   template <typename DType, typename... Dims>
   static TensorMetadata Create(Dims... dims) {
-    return TensorMetadata(
-        GetDType<DType>(),
-        std::array<ssize_t, sizeof...(Dims)>{static_cast<ssize_t>(dims)...});
+    return TensorMetadata(GetDType<DType>(), std::array<Index, sizeof...(Dims)>{
+                                                 static_cast<Index>(dims)...});
   }
 
   bool IsValid() const { return tfrt::IsValid(dtype); }
