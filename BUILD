@@ -169,6 +169,7 @@ tfrt_cc_library(
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":support",
         "@llvm-project//llvm:Support",
         "@tf_runtime//third_party/llvm_derived:unique_any",
@@ -192,6 +193,22 @@ tfrt_cc_library(
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        "@llvm-project//llvm:Support",
+    ],
+)
+
+tfrt_cc_library(
+    name = "bef",
+    hdrs = [
+        "include/tfrt/bef/bef_buffer.h",
+        "include/tfrt/bef/bef_encoding.h",
+        "include/tfrt/bef/bef_reader.h",
+    ],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    visibility = [":friends"],
+    deps = [
+        ":dtype",
+        ":support",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -299,6 +316,7 @@ tfrt_cc_library(
     ],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":bef_attr_encoder",
         ":hostcontext",
         ":support",
@@ -371,6 +389,7 @@ tfrt_cc_library(
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":bef_location",
         ":dtype",
         ":hostcontext",
@@ -445,6 +464,7 @@ tfrt_cc_library(
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":bef_attr_encoder",
         ":bef_emitter",
         ":dtype",
@@ -491,6 +511,7 @@ tfrt_cc_library(
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":dtype",
         ":support",
         "@llvm-project//llvm:Support",
@@ -512,6 +533,7 @@ tfrt_cc_library(
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":bef_attr_emitter",
         ":bef_attr_encoder",
         ":bef_emitter",
@@ -537,6 +559,7 @@ tfrt_cc_library(
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":init_tfrt_dialects",
         ":mlirtobef",
         ":support",
@@ -559,6 +582,7 @@ tfrt_cc_library(
     ],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":bef_attr_reader",
         ":bef_location",
         ":bef_location_reader",
@@ -578,6 +602,7 @@ tfrt_cc_library(
     alwayslink_static_registration_src = "lib/bef_converter/bef_to_mlir/static_registration.cc",
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":beftomlir",
         ":init_tfrt_dialects",
         ":support",
@@ -600,6 +625,7 @@ tfrt_cc_library(
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":bef_emitter",
         ":dtype",
         ":hostcontext",
@@ -993,6 +1019,7 @@ tfrt_cc_library(
     ],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":befexecutor",
         ":core_runtime",
         ":hostcontext",
@@ -1041,6 +1068,7 @@ tfrt_cc_library(
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":dtype",
         ":hostcontext",
         ":support",
@@ -1341,6 +1369,7 @@ tfrt_cc_library(
     alwayslink_static_registration_src = "lib/distributed_runtime/static_registration.cc",
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":befexecutor",
         ":cluster_config_cc_proto",
         ":compiler_pass",
@@ -1617,6 +1646,7 @@ tfrt_cc_library(
     ],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":init_tfrt_dialects",
         ":mlirtobef",
         ":support",
@@ -1640,6 +1670,7 @@ tfrt_cc_library(
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":bef_attr_encoder",
         ":bef_emitter",
         ":core_runtime_opdefs",
@@ -1657,6 +1688,7 @@ tfrt_cc_library(
     ],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":core_runtime_opdefs",
         ":dtype",
         ":hostcontext",
@@ -1677,6 +1709,7 @@ tfrt_cc_library(
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":bef_emitter",
         ":bef_location",
         ":support",
@@ -1694,6 +1727,7 @@ tfrt_cc_library(
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":bef_emitter",
         ":support",
         "@llvm-project//llvm:Support",
@@ -1712,6 +1746,7 @@ tfrt_cc_library(
     # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":hostcontext",
         ":support",
         "@llvm-project//llvm:Support",
@@ -1726,6 +1761,7 @@ tfrt_cc_library(
     ],
     visibility = [":friends"],
     deps = [
+        ":bef",
         ":bef_location",
         ":support",
         "@llvm-project//llvm:Support",
